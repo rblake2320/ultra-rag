@@ -5,12 +5,18 @@ KG graph operations:
 - Specificity-weighted node scoring
 - Cross-collection bridge detection
 
+Incorporates:
+- HippoRAG 2: non-uniform personalization vector (seed weights ∝ query similarity)
+- CatRAG: query-aware edge re-weighting before PPR traversal to fix static-graph
+  semantic drift toward hub nodes; symbolic anchoring keeps seed influence stable
+
 Typical usage:
     from src.kg_graph import KGGraph
     g = KGGraph(conn, "imds")
 
     seeds = g.get_seed_entities("Work Order status codes", query_embedding=emb)
-    top   = g.ppr([s["id"] for s in seeds], top_k=20)
+    top   = g.ppr([s["id"] for s in seeds], top_k=20, query_embedding=emb,
+                  seed_scores={s["id"]: s.get("similarity", 1.0) for s in seeds})
     chunks = g.get_entity_chunks([e["id"] for e in top])
 """
 import json
@@ -111,53 +117,104 @@ class KGGraph:
         alpha: float = 0.85,
         max_iter: int = 30,
         top_k: int = 20,
+        query_embedding: Optional[list] = None,
+        seed_scores: Optional[dict] = None,
+        catrag_beta: float = 0.4,
+        anchor_gamma: float = 0.1,
     ) -> list:
         """
         Run Personalized PageRank from *seed_entity_ids* over the entity graph.
 
-        Uses scipy.sparse for the adjacency matrix.  The personalization vector
-        is a uniform distribution over the seed nodes.
-        Specificity boost is applied to the raw PPR scores before ranking.
+        Incorporates two improvements over standard PPR:
+
+        **HippoRAG 2 — Non-uniform personalization vector**
+            When *seed_scores* is provided (dict mapping entity_id → similarity),
+            the personalization mass is distributed proportionally to query
+            similarity rather than uniformly.  Seeds more similar to the query
+            receive higher teleportation probability, biasing the walk toward the
+            most relevant part of the graph.
+
+        **CatRAG — Query-aware edge re-weighting + symbolic anchoring**
+            When *query_embedding* is provided, each edge (src → tgt) is
+            re-weighted as:
+                w_new = w_base × (1 + β × max(sim_q_src, sim_q_tgt))
+            where sim_q_* is the cosine similarity of the query to the entity
+            embedding.  This breaks the "Static Graph Fallacy" where fixed
+            weights cause PPR to drift toward structurally central hub nodes
+            regardless of query semantics.
+
+            Symbolic anchoring keeps seed influence from vanishing: the
+            personalization vector also gets a *anchor_gamma* boost at every
+            iteration to counteract over-diffusion away from seed nodes.
 
         Parameters
         ----------
         seed_entity_ids : List of entity IDs to personalise toward.
-        alpha           : Damping factor (0.85 is standard PageRank default).
+        alpha           : Damping factor (0.85 default).
         max_iter        : Maximum power-iteration steps.
         top_k           : Number of top entities to return.
+        query_embedding : Optional query vector for CatRAG edge re-weighting.
+        seed_scores     : Optional {entity_id: float} for HippoRAG 2 non-uniform p.
+        catrag_beta     : Strength of query-aware edge boost (0 = disabled).
+        anchor_gamma    : Per-step seed re-injection fraction for symbolic anchoring.
 
         Returns
         -------
         list of dicts: {id, name, entity_type, description, specificity, score}
         Sorted descending by score.  Returns [] if the collection has no edges.
         """
+        try:
+            from scipy.sparse import csr_matrix, diags
+        except ImportError as exc:
+            raise ImportError(
+                "scipy is required for PPR. Install with: pip install scipy"
+            ) from exc
+
+        if not seed_entity_ids:
+            log.warning("ppr called with empty seed list.")
+            return []
+
         # ── Load adjacency ───────────────────────────────────────────────
         entity_idx, n, weights = self._load_adjacency()
         if n == 0 or not entity_idx:
             log.info("ppr: no entities in collection '%s'.", self.collection)
             return []
 
-        if not seed_entity_ids:
-            log.warning("ppr called with empty seed list.")
-            return []
+        idx_map: dict[int, int] = {eid: i for i, eid in enumerate(entity_idx)}
+
+        # ── CatRAG: query-aware edge re-weighting ────────────────────────
+        # Load entity embeddings for all nodes that have them so we can compute
+        # cosine(query, entity) for each endpoint of every edge.
+        query_sim: dict[int, float] = {}
+        if query_embedding and catrag_beta > 0:
+            q_vec = np.array(query_embedding, dtype=np.float32)
+            q_norm = np.linalg.norm(q_vec)
+            if q_norm > 0:
+                q_vec = q_vec / q_norm
+                query_sim = self._load_entity_similarities(
+                    list(idx_map.keys()), q_vec
+                )
+                log.debug(
+                    "CatRAG: loaded query similarities for %d entities.", len(query_sim)
+                )
 
         # ── Build sparse row-stochastic matrix ──────────────────────────
-        try:
-            from scipy.sparse import csr_matrix
-        except ImportError as exc:
-            raise ImportError(
-                "scipy is required for PPR. Install with: pip install scipy"
-            ) from exc
-
-        idx_map: dict[int, int] = {eid: i for i, eid in enumerate(entity_idx)}
         rows, cols, data = [], [], []
-
         for (src_eid, tgt_eid), w in weights.items():
             src_i = idx_map.get(src_eid)
             tgt_i = idx_map.get(tgt_eid)
             if src_i is None or tgt_i is None:
                 continue
-            # Undirected: add both directions
+
+            # Apply CatRAG query-aware boost to edge weight
+            if query_sim:
+                max_sim = max(
+                    query_sim.get(src_eid, 0.0),
+                    query_sim.get(tgt_eid, 0.0),
+                )
+                w = w * (1.0 + catrag_beta * max_sim)
+
+            # Undirected: both directions
             rows.append(src_i); cols.append(tgt_i); data.append(w)
             rows.append(tgt_i); cols.append(src_i); data.append(w)
 
@@ -166,38 +223,53 @@ class KGGraph:
             return []
 
         A = csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.float32)
-
-        # Row-normalise to make it a transition matrix
         row_sums = np.array(A.sum(axis=1)).flatten()
         row_sums = np.where(row_sums == 0, 1.0, row_sums)
-        # Divide each row by its sum using sparse diagonal multiplication
-        from scipy.sparse import diags
-        D_inv = diags(1.0 / row_sums)
-        A_norm = D_inv @ A  # row-stochastic
+        A_norm = diags(1.0 / row_sums) @ A  # row-stochastic
 
-        # ── Personalization vector ───────────────────────────────────────
+        # ── HippoRAG 2: non-uniform personalization vector ───────────────
         p = np.zeros(n, dtype=np.float64)
-        valid_seeds = [idx_map[eid] for eid in seed_entity_ids if eid in idx_map]
+        valid_seeds = [(idx_map[eid], eid) for eid in seed_entity_ids if eid in idx_map]
         if not valid_seeds:
-            log.warning(
-                "ppr: none of the seed IDs (%s) found in graph index.", seed_entity_ids
-            )
+            log.warning("ppr: none of the seed IDs found in graph index.")
             return []
 
-        p[valid_seeds] = 1.0 / len(valid_seeds)
+        if seed_scores:
+            # Weight each seed by its query similarity score
+            raw_weights = np.array(
+                [seed_scores.get(eid, 1.0) for _, eid in valid_seeds],
+                dtype=np.float64,
+            )
+            raw_weights = np.clip(raw_weights, 0.0, None)
+            total = raw_weights.sum()
+            if total > 0:
+                raw_weights /= total
+                for (idx_i, _), w_i in zip(valid_seeds, raw_weights):
+                    p[idx_i] = w_i
+            else:
+                for idx_i, _ in valid_seeds:
+                    p[idx_i] = 1.0 / len(valid_seeds)
+        else:
+            for idx_i, _ in valid_seeds:
+                p[idx_i] = 1.0 / len(valid_seeds)
 
-        # ── Power iteration ──────────────────────────────────────────────
+        # ── Power iteration with symbolic anchoring ──────────────────────
+        # Symbolic anchoring (CatRAG): re-inject a small fraction of the seed
+        # personalization vector at every step, preventing over-diffusion away
+        # from the original seed nodes after many hops.
         r = p.copy()
         for _ in range(max_iter):
             r_new = alpha * A_norm.T.dot(r) + (1.0 - alpha) * p
+            # Symbolic anchor: blend back toward seeds each iteration
+            if anchor_gamma > 0:
+                r_new = (1.0 - anchor_gamma) * r_new + anchor_gamma * p
+                r_new /= r_new.sum() if r_new.sum() > 0 else 1.0
             if np.linalg.norm(r_new - r, 1) < 1e-6:
                 break
             r = r_new
 
         # ── Specificity boost & top-k ────────────────────────────────────
-        # Fetch specificity for all entities
         spec = self._load_specificities(entity_idx)
-
         scored = [
             (entity_idx[i], float(r[i]) * (1.0 + spec.get(entity_idx[i], 0.0)))
             for i in range(n)
@@ -205,7 +277,6 @@ class KGGraph:
         scored.sort(key=lambda x: x[1], reverse=True)
         top_ids = [eid for eid, _ in scored[:top_k]]
 
-        # Fetch entity details
         id_to_score = {eid: s for eid, s in scored[:top_k]}
         entities    = self._fetch_entities_by_ids(top_ids)
         for e in entities:
@@ -456,6 +527,46 @@ class KGGraph:
 
         entity_idx = sorted(node_set)
         return entity_idx, len(entity_idx), weights
+
+    def _load_entity_similarities(
+        self, entity_ids: list, query_vec: np.ndarray
+    ) -> dict:
+        """
+        Compute cosine similarity between *query_vec* and each entity's embedding.
+
+        Returns {entity_id: cosine_similarity} for entities that have embeddings.
+        Used by CatRAG query-aware edge re-weighting.
+        """
+        if not entity_ids:
+            return {}
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, embedding::text
+                    FROM rag.entities
+                    WHERE id = ANY(%s)
+                      AND embedding IS NOT NULL
+                """, (entity_ids,))
+                rows = cur.fetchall()
+        except Exception as exc:
+            log.debug("_load_entity_similarities failed: %s", exc)
+            return {}
+
+        if not rows:
+            return {}
+
+        ids = [r[0] for r in rows]
+        try:
+            mat = np.array([json.loads(r[1]) for r in rows], dtype=np.float32)
+        except Exception:
+            return {}
+
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        mat = mat / norms
+
+        sims = mat @ query_vec  # (n,) cosine similarities, query_vec already normalized
+        return {eid: float(max(0.0, s)) for eid, s in zip(ids, sims)}
 
     def _load_specificities(self, entity_ids: list) -> dict:
         """Return {entity_id: specificity} for a list of IDs."""

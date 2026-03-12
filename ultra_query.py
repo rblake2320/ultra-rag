@@ -83,11 +83,19 @@ def _search_kg_local(conn, query: str, collection: str, top_k: int) -> list:
         embs = _embed_batch([query], cfg["ollama_url"], cfg["model"])
         query_emb = embs[0] if embs else None
         kg = KGGraph(conn, collection)
-        seed_ids = kg.get_seed_entities(query, top_k=8, query_embedding=query_emb)
-        if not seed_ids:
+        seeds = kg.get_seed_entities(query, top_k=8, query_embedding=query_emb)
+        if not seeds:
             return _search_hybrid(conn, query, collection, top_k)
-        ppr_ids = kg.ppr(seed_ids)
-        chunks = kg.get_entity_chunks(ppr_ids[:top_k * 2])
+        seed_ids = [s["id"] for s in seeds]
+        # HippoRAG 2: pass per-seed similarity scores for non-uniform personalization
+        seed_scores = {s["id"]: s.get("similarity", 1.0) for s in seeds}
+        # CatRAG: pass query embedding for query-aware edge re-weighting
+        ppr_ids = kg.ppr(
+            seed_ids,
+            query_embedding=query_emb,
+            seed_scores=seed_scores,
+        )
+        chunks = kg.get_entity_chunks([e["id"] for e in ppr_ids[:top_k * 2]])
         return chunks[:top_k]
     except Exception as exc:
         log.warning("KG local search failed: %s; falling back to hybrid", exc)
