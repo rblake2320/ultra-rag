@@ -1,24 +1,35 @@
 # Python
-*.pyc
 __pycache__/
+*.pyc
+*.pyo
 .venv/
-dist/
+venv/
+*.egg-info/
 
-# Credentials / config with secrets
+# Credentials — NEVER commit
 config.yaml
+config.yml
+.env
+*.env
+ai_agent_credentials.json
+
+# Large data files
+*.jsonl
+*.gguf
+imds-corpus.db
+imds_training_data*.jsonl
+synthetic_training*.jsonl
 
 # Logs
-*.log
 logs/
+*.log
 
-# Environment
-.env
+# Temp
+*.tmp
+tmp_*.py
 
-# Databases
-*.db
-
-# Training / data files
-*.jsonl
-
-# Chroma export dir (large binary data)
-chroma-export/
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

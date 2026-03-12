@@ -248,6 +248,24 @@ class HealthResponse(BaseModel):
     ollama:    str
     pgvector:  str
     timestamp: str
+    memoryweb: str = "unknown"
+    systems_online: int = 0
+
+
+class SystemRegisterRequest(BaseModel):
+    system_id:   str                  # e.g. "laptop-1", "spark-1"
+    role:        str   = "client"
+    host:        Optional[str] = None
+    services:    List[str] = []
+    gpu:         Optional[str] = None
+    capabilities: List[str] = []     # e.g. ["search", "ingest", "offline-sqlite"]
+
+
+class SystemsResponse(BaseModel):
+    hub:     Dict[str, Any]
+    systems: Dict[str, Any]
+    laptops: Dict[str, Any]
+    total:   int
 
 
 class StatsResponse(BaseModel):
@@ -352,6 +370,82 @@ async def root():
     if not index_path.exists():
         return HTMLResponse(content="<h1>Dashboard not found — place index.html in static/</h1>", status_code=404)
     return FileResponse(str(index_path), media_type="text/html")
+
+
+# ---------------------------------------------------------------------------
+# /api/systems — System Registry
+# ---------------------------------------------------------------------------
+
+@app.get("/api/systems", tags=["System"])
+async def get_systems(request: Request, api_key: str = Security(_api_key_header)):
+    """Return all known systems — hub, fixed nodes, and dynamically registered laptops."""
+    _check_api_key(request, api_key)
+    _SYSTEMS["windows-pc"]["last_seen"] = datetime.utcnow().isoformat()
+    return SystemsResponse(
+        hub=_SYSTEMS["windows-pc"],
+        systems={k: v for k, v in _SYSTEMS.items() if k != "windows-pc"},
+        laptops=_LAPTOPS,
+        total=len(_SYSTEMS) + len(_LAPTOPS),
+    )
+
+
+@app.post("/api/systems/register", tags=["System"])
+async def register_system(req: SystemRegisterRequest, request: Request,
+                           api_key: str = Security(_api_key_header)):
+    """Laptops and remote systems call this on startup to register themselves."""
+    _check_api_key(request, api_key)
+    client_ip = request.client.host if request.client else "unknown"
+    _LAPTOPS[req.system_id] = {
+        "role":         req.role,
+        "host":         req.host or client_ip,
+        "services":     req.services,
+        "gpu":          req.gpu,
+        "capabilities": req.capabilities,
+        "last_seen":    datetime.utcnow().isoformat(),
+        "ip":           client_ip,
+    }
+    log.info("System registered: %s from %s", req.system_id, client_ip)
+    return {"registered": req.system_id, "hub_url": "http://localhost:8300"}
+
+
+@app.post("/api/systems/heartbeat/{system_id}", tags=["System"])
+async def system_heartbeat(system_id: str, request: Request,
+                            api_key: str = Security(_api_key_header)):
+    """Lightweight ping — update last_seen for a registered system."""
+    _check_api_key(request, api_key)
+    target = _SYSTEMS.get(system_id) or _LAPTOPS.get(system_id)
+    if target:
+        target["last_seen"] = datetime.utcnow().isoformat()
+    return {"ok": True, "system_id": system_id}
+
+
+# ---------------------------------------------------------------------------
+# /api/memory — MemoryWeb bridge
+# ---------------------------------------------------------------------------
+
+@app.get("/api/memory/status", tags=["Memory"])
+async def memory_status(request: Request, api_key: str = Security(_api_key_header)):
+    """Check if MemoryWeb is reachable."""
+    _check_api_key(request, api_key)
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{_MEMORYWEB_URL}/api/status")
+            if resp.status_code == 200:
+                data = resp.json()
+                return {"status": "online", "memories": data.get("memories", "?"),
+                        "url": _MEMORYWEB_URL}
+    except Exception as exc:
+        pass
+    return {"status": "offline", "url": _MEMORYWEB_URL}
+
+
+@app.get("/api/memory/recall", tags=["Memory"])
+async def memory_recall(q: str, top_k: int = 5, request: Request = None,
+                         api_key: str = Security(_api_key_header)):
+    """Query MemoryWeb for memories relevant to a search term."""
+    _check_api_key(request, api_key)
+    memories = await _memoryweb_recall(q, top_k)
+    return {"query": q, "memories": memories, "count": len(memories)}
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +596,6 @@ async def health():
 
     # Ollama check
     try:
-        import httpx  # noqa: PLC0415
         from src.config import get_config  # noqa: PLC0415
         cfg = get_config()
         ollama_url = cfg.get("llm", {}).get("ollama_url", "http://localhost:11434")
@@ -511,13 +604,26 @@ async def health():
     except Exception as exc:
         ollama_status = f"error: {exc}"
 
+    # MemoryWeb check
+    memoryweb_status = "disabled"
+    if _MEMORYWEB_ENABLED:
+        try:
+            resp = httpx.get(f"{_MEMORYWEB_URL}/api/status", timeout=2.0)
+            memoryweb_status = "ok" if resp.status_code == 200 else f"error: {resp.status_code}"
+        except Exception:
+            memoryweb_status = "offline"
+
     overall = "ok" if all(s == "ok" for s in [db_status, pgvector_status, ollama_status]) else "degraded"
+    systems_seen = sum(1 for s in list(_SYSTEMS.values()) + list(_LAPTOPS.values())
+                       if s.get("last_seen"))
 
     return HealthResponse(
         status=overall,
         db=db_status,
         ollama=ollama_status,
         pgvector=pgvector_status,
+        memoryweb=memoryweb_status,
+        systems_online=systems_seen,
         timestamp=datetime.utcnow().isoformat(),
     )
 
@@ -564,11 +670,18 @@ async def stats(collection: str = Query("imds", description="Collection name")):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/search", response_model=SearchResponse, tags=["Retrieval"])
-async def search(req: SearchRequest):
+async def search(req: SearchRequest, request: Request,
+                 api_key: str = Security(_api_key_header)):
     """
     Ultra search — runs full pipeline: routing → retrieval → rerank →
     CRAG → Self-RAG → utility boost → parent expansion → provenance.
+    Optionally augments context with MemoryWeb memories.
     """
+    _check_api_key(request, api_key)
+
+    # Pull MemoryWeb context in parallel (non-blocking)
+    memory_task = asyncio.create_task(_memoryweb_recall(req.query, top_k=3))
+
     def _run():
         from ultra_query import run_ultra_query  # noqa: PLC0415
         conn = _get_conn()
@@ -588,6 +701,16 @@ async def search(req: SearchRequest):
     except Exception as exc:
         log.error("/api/search failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+    # Attach MemoryWeb memories to first result's provenance (if available)
+    memories = await memory_task
+    if memories:
+        result.setdefault("memory_context", memories)
+
+    # Fire-and-forget: store this query in MemoryWeb
+    top_content = result.get("results", [{}])[0].get("content", "")[:200] if result.get("results") else ""
+    if top_content:
+        asyncio.create_task(_memoryweb_store(req.query, top_content, req.collection))
 
     # Convert results to ResultItem list
     items = []
