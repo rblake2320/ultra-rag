@@ -73,23 +73,36 @@ def embed_collection(conn, collection: str) -> int:
         try:
             embeddings = _embed_batch(texts, url, model)
         except Exception as e:
-            log.error(f"Embed batch failed at index {batch_start}: {e}")
-            continue
+            # Batch too large — fall back to one-at-a-time
+            log.warning(f"Batch at index {batch_start} failed ({e}), retrying one-by-one...")
+            embeddings = []
+            for i, text in enumerate(texts):
+                try:
+                    emb = _embed_batch([text], url, model)
+                    embeddings.append(emb[0] if emb else None)
+                except Exception as e2:
+                    log.error(f"  Single embed failed for chunk id={ids[i]}: {e2}")
+                    embeddings.append(None)
 
         if len(embeddings) != len(batch):
             log.warning(f"Expected {len(batch)} embeddings, got {len(embeddings)}")
             continue
 
-        # Write back
-        with conn.cursor() as cur:
-            updates = [(emb, model, row_id) for emb, row_id in zip(embeddings, ids)]
-            psycopg2.extras.execute_batch(cur, """
-                UPDATE rag.chunks
-                SET embedding = %s::vector, embed_model = %s
-                WHERE id = %s
-            """, updates)
-        conn.commit()
-        total += len(batch)
+        # Write back (skip any None embeddings from fallback failures)
+        updates = [
+            (emb, model, row_id)
+            for emb, row_id in zip(embeddings, ids)
+            if emb is not None
+        ]
+        if updates:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_batch(cur, """
+                    UPDATE rag.chunks
+                    SET embedding = %s::vector, embed_model = %s
+                    WHERE id = %s
+                """, updates)
+            conn.commit()
+            total += len(updates)
 
         if (batch_start // batch_sz) % 10 == 0:
             elapsed = time.time() - t0
