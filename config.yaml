@@ -34,7 +34,7 @@ embedding:
   provider:   ollama
   dimensions: 768
   ollama_url: "http://localhost:11434"
-  batch_size: 32
+  batch_size: 4
 
 search:
   # Optional: NVIDIA NIM reranker (leave nvidia_api_key blank to skip)
