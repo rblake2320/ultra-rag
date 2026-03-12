@@ -1,0 +1,38 @@
+# Ultra RAG — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Core ─────────────────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.0        # PostgreSQL driver
+pyyaml>=6.0                   # config.yaml parsing
+httpx>=0.27.0                 # async HTTP (Ollama, NIM, external APIs)
+numpy>=1.26.0                 # vector math
+python-dotenv>=1.0.0          # .env file loading
+
+# ── Document Parsing ─────────────────────────────────────────────────────────
+python-docx>=1.1.0            # DOCX structure-aware parsing
+pypdf>=4.0.0                  # PDF fallback parser
+PyMuPDF>=1.24.0               # PDF primary parser (faster, table extraction)
+chardet>=5.0.0                # encoding detection for TXT/MD files
+tiktoken>=0.7.0               # token counting (cl100k_base / o200k_base)
+
+# ── Knowledge Graph ───────────────────────────────────────────────────────────
+igraph>=0.11.0                # graph construction and PPR
+leidenalg>=0.10.0             # Leiden community detection algorithm
+
+# ── ML / Embeddings ──────────────────────────────────────────────────────────
+scikit-learn>=1.4.0           # clustering (KMeans for RAPTOR)
+scipy>=1.13.0                 # cosine similarity, sparse operations
+sentence-transformers>=3.0.0  # local embedding fallback
+
+# ── API Server ────────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.0.0
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+ragas>=0.2.0                  # RAG evaluation metrics (faithfulness, relevancy, etc.)
+datasets>=3.0.0               # HuggingFace datasets (used by ragas)
+
+# ── Optional: enhanced features ──────────────────────────────────────────────
+anthropic>=0.40.0             # Claude API fallback LLM
+Pillow>=10.0.0                # image processing (multimodal.py)

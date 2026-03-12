@@ -1,0 +1,343 @@
+"""
+Unified reranker: local cross-encoder (sentence-transformers) on GPU + NIM fallback.
+
+Cross-encoders provide substantially better relevance judgements than
+bi-encoder cosine similarity because they jointly encode query and passage.
+
+Preference order
+----------------
+1. Local  : sentence-transformers CrossEncoder on RTX 5090 (zero API cost, ~2–5 ms/pair)
+2. Remote : NVIDIA NIM re-ranker endpoint (requires NVIDIA_API_KEY in config)
+
+If neither is available, the input candidates are returned unchanged.
+
+The optional :meth:`rerank_with_utility` method boosts scores for chunks that
+have been marked as helpful in past queries (stored in rag.chunk_utility).
+
+Usage
+-----
+    from src.reranker import Reranker, rrf_merge
+
+    reranker = Reranker()                          # auto-detects GPU
+    results  = reranker.rerank(query, candidates, top_k=5)
+
+    # With utility boosting
+    results  = reranker.rerank_with_utility(query, candidates, top_k=5, conn=conn)
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+import httpx
+
+from .config import get_config
+
+log = logging.getLogger(__name__)
+
+# Default cross-encoder — tiny, fast, good quality for English
+_DEFAULT_CE_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+# Utility boost multiplier: final_score = rerank_score * (1 + 0.3 * utility_ema)
+_UTILITY_BOOST_FACTOR = 0.3
+
+# Maximum content length sent to NIM (characters, not tokens)
+_NIM_MAX_PASSAGE_CHARS = 2000
+
+
+# ---------------------------------------------------------------------------
+# Standalone RRF helper — importable from here OR from hyde.py
+# ---------------------------------------------------------------------------
+
+def rrf_merge(result_lists: list, k: int = 60, top_k: int = 10) -> list:
+    """
+    Reciprocal Rank Fusion across multiple result lists.
+
+    Parameters
+    ----------
+    result_lists : list of lists
+        Each inner list is a sequence of result dicts containing an 'id' key.
+        Lists need not be the same length.
+    k : int
+        RRF damping constant (default 60).
+    top_k : int
+        Maximum results to return.
+
+    Returns
+    -------
+    Merged, deduplicated list sorted by descending RRF score.
+    Each dict gains an 'rrf_score' key.
+    """
+    scores: dict = {}
+    rows:   dict = {}
+
+    for result_list in result_lists:
+        for rank, row in enumerate(result_list, start=1):
+            rid = row["id"]
+            scores[rid] = scores.get(rid, 0.0) + 1.0 / (k + rank)
+            if rid not in rows:
+                rows[rid] = dict(row)
+
+    merged = sorted(rows.values(), key=lambda r: scores[r["id"]], reverse=True)
+    for row in merged:
+        row["rrf_score"] = round(scores[row["id"]], 8)
+
+    return merged[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Reranker
+# ---------------------------------------------------------------------------
+
+class Reranker:
+    """
+    Cross-encoder reranker with automatic GPU detection and NIM fallback.
+
+    Parameters
+    ----------
+    model_name : str
+        HuggingFace model ID for the local cross-encoder.
+        Default: ``cross-encoder/ms-marco-MiniLM-L-6-v2``
+        (6-layer MiniLM — fast enough for real-time use on any GPU).
+    use_gpu : bool
+        When True (default) and CUDA is available, the model is loaded on
+        the GPU (RTX 5090 on this system).
+    """
+
+    def __init__(
+        self,
+        model_name: str = _DEFAULT_CE_MODEL,
+        use_gpu: bool = True,
+    ) -> None:
+        self._model_name   = model_name
+        self._local_model  = None
+        self._device       = "cpu"
+
+        # ── Attempt to load local cross-encoder ─────────────────────
+        try:
+            import torch  # noqa: F401 — just checking availability
+            from sentence_transformers import CrossEncoder
+
+            if use_gpu:
+                import torch
+                self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            log.info(
+                "Reranker: loading local cross-encoder '%s' on device=%s",
+                model_name, self._device,
+            )
+            self._local_model = CrossEncoder(
+                model_name,
+                device=self._device,
+                max_length=512,
+            )
+            log.info("Reranker: local cross-encoder ready.")
+
+        except ImportError:
+            log.warning(
+                "Reranker: sentence-transformers or torch not installed. "
+                "Will fall back to NIM re-ranker."
+            )
+        except Exception as exc:
+            log.warning(
+                "Reranker: local cross-encoder load failed (%s). "
+                "Will fall back to NIM re-ranker.",
+                exc,
+            )
+
+        # ── NIM config (used when local model unavailable) ───────────
+        cfg = get_config().get("search", {})
+        self._nim_api_key  = cfg.get("nvidia_api_key", "")
+        self._nim_endpoint = cfg.get("reranker_endpoint", "")
+        self._nim_model    = cfg.get("reranker_model", "nvidia/nv-rerankqa-mistral-4b-v3")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def rerank(
+        self,
+        query: str,
+        candidates: list,
+        top_k: int = 5,
+    ) -> list:
+        """
+        Rerank *candidates* against *query*.
+
+        Tries the local cross-encoder first; falls back to NIM; if both
+        fail, returns the top_k candidates in their original order.
+
+        Parameters
+        ----------
+        query : str
+        candidates : list of result dicts (must have 'content' and 'id' keys)
+        top_k : int
+
+        Returns
+        -------
+        Top *top_k* candidates sorted by descending ``rerank_score``.
+        Each dict gains a ``rerank_score`` key (float).
+        """
+        if not candidates:
+            return []
+
+        top_k = min(top_k, len(candidates))
+
+        if self._local_model is not None:
+            try:
+                return self._local_rerank(query, candidates, top_k)
+            except Exception as exc:
+                log.warning("Reranker: local cross-encoder inference failed (%s); trying NIM.", exc)
+
+        try:
+            return self._nim_rerank(query, candidates, top_k)
+        except Exception as exc:
+            log.warning("Reranker: NIM re-ranker also failed (%s); returning original order.", exc)
+            for c in candidates:
+                c.setdefault("rerank_score", 0.0)
+            return candidates[:top_k]
+
+    def rerank_with_utility(
+        self,
+        query: str,
+        candidates: list,
+        top_k: int = 5,
+        conn=None,
+    ) -> list:
+        """
+        Rerank and then boost scores using per-chunk utility signals.
+
+        The utility EMA (exponential moving average of helpfulness) is stored
+        in ``rag.chunk_utility.utility_ema``.  A chunk with ``utility_ema = 1.0``
+        gets a 30% score boost; one with ``utility_ema = 0.0`` gets no boost.
+
+        Parameters
+        ----------
+        query : str
+        candidates : list
+        top_k : int
+        conn : psycopg2 connection, optional
+            If None, utility boosting is skipped.
+
+        Returns
+        -------
+        Top *top_k* candidates sorted by boosted rerank score.
+        """
+        reranked = self.rerank(query, candidates, top_k=len(candidates))
+
+        if conn is None or not reranked:
+            return reranked[:top_k]
+
+        # ── Load utility scores ──────────────────────────────────────
+        chunk_ids = [r["id"] for r in reranked]
+        utility_map: dict = self._load_utility(conn, chunk_ids)
+
+        if not utility_map:
+            return reranked[:top_k]
+
+        # ── Apply boost ──────────────────────────────────────────────
+        for row in reranked:
+            ema = utility_map.get(row["id"], 0.0)
+            raw = row.get("rerank_score", 0.0)
+            row["rerank_score"] = raw * (1.0 + _UTILITY_BOOST_FACTOR * ema)
+            row["utility_ema"] = ema
+
+        reranked.sort(key=lambda r: r["rerank_score"], reverse=True)
+        return reranked[:top_k]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _local_rerank(
+        self, query: str, candidates: list, top_k: int
+    ) -> list:
+        """Run local CrossEncoder.predict on (query, passage) pairs."""
+        pairs = [(query, c.get("content", "")[:1024]) for c in candidates]
+        scores = self._local_model.predict(pairs)
+
+        # scores is a numpy array or list; convert to plain float
+        scored = list(zip(candidates, scores))
+        scored.sort(key=lambda x: float(x[1]), reverse=True)
+
+        result = []
+        for cand, score in scored[:top_k]:
+            d = dict(cand)
+            d["rerank_score"] = round(float(score), 6)
+            result.append(d)
+        return result
+
+    def _nim_rerank(
+        self, query: str, candidates: list, top_k: int
+    ) -> list:
+        """
+        Call the NVIDIA NIM re-ranker endpoint.
+
+        Mirrors the logic in search.py:_nim_rerank but is self-contained
+        so the Reranker class can be used independently of search.py.
+        """
+        if not self._nim_api_key or not self._nim_endpoint:
+            raise ValueError(
+                "NIM re-ranker requires 'nvidia_api_key' and 'reranker_endpoint' "
+                "in config.yaml search section."
+            )
+
+        passages = [
+            {"text": c.get("content", "")[:_NIM_MAX_PASSAGE_CHARS]}
+            for c in candidates
+        ]
+
+        resp = httpx.post(
+            self._nim_endpoint,
+            headers={"Authorization": f"Bearer {self._nim_api_key}"},
+            json={
+                "model":    self._nim_model,
+                "query":    {"text": query},
+                "passages": passages,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
+        rankings = resp.json().get("rankings", [])
+        # rankings: [{"index": int, "logit": float}, ...] sorted by relevance
+        top_rankings = rankings[:top_k]
+
+        result = []
+        for entry in top_rankings:
+            idx = entry.get("index", -1)
+            if 0 <= idx < len(candidates):
+                d = dict(candidates[idx])
+                d["rerank_score"] = round(float(entry.get("logit", 0.0)), 6)
+                result.append(d)
+
+        return result
+
+    @staticmethod
+    def _load_utility(conn, chunk_ids: list) -> dict:
+        """
+        Fetch utility_ema values from rag.chunk_utility for the given chunk IDs.
+
+        Returns
+        -------
+        dict mapping chunk_id (int) → utility_ema (float).
+        Returns {} if the table doesn't exist or the query fails.
+        """
+        if not chunk_ids:
+            return {}
+        try:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT chunk_id, utility_ema
+                    FROM rag.chunk_utility
+                    WHERE chunk_id = ANY(%s)
+                    """,
+                    (chunk_ids,),
+                )
+                rows = cur.fetchall()
+            return {r["chunk_id"]: float(r["utility_ema"]) for r in rows}
+        except Exception as exc:
+            log.debug("Reranker: could not load chunk utility scores: %s", exc)
+            return {}

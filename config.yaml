@@ -1,0 +1,92 @@
+# Ultra RAG Configuration
+# Copy this file and customize for your collection.
+# Environment variables (${VAR}) are resolved from the shell or a .env file.
+
+collections:
+  # ── Default collection — point at your documents ──────────────────────────
+  default:
+    paths:
+      - "./documents"        # put your docs here (DOCX, PDF, TXT, MD)
+    exclude_dirs:
+      - "__pycache__"
+      - ".git"
+      - "node_modules"
+      - ".venv"
+      - "venv"
+    skip_files: []           # list of filenames to skip, e.g. ["draft.docx"]
+
+  # ── Example: a second collection ─────────────────────────────────────────
+  # my_collection:
+  #   paths:
+  #     - "/path/to/my/docs"
+  #   exclude_dirs: []
+  #   skip_files: []
+
+db:
+  host:     localhost
+  port:     5432
+  database: postgres
+  user:     postgres
+  password: "${RAG_DB_PASSWORD}"   # set in .env or shell environment
+
+embedding:
+  model:      nomic-embed-text
+  provider:   ollama
+  dimensions: 768
+  ollama_url: "http://localhost:11434"
+  batch_size: 32
+
+search:
+  # Optional: NVIDIA NIM reranker (leave nvidia_api_key blank to skip)
+  reranker_model:    nvidia/rerank-qa-mistral-4b
+  reranker_endpoint: "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
+  nvidia_api_key:    "${NVIDIA_API_KEY}"
+  # Reciprocal Rank Fusion parameters
+  rrf_k_vector:  60
+  rrf_k_keyword: 40
+
+llm:
+  provider:    ollama
+  model:       deepseek-r1:32b   # used for KG extraction, RAPTOR, communities
+  fast_model:  gemma3:latest     # used for contextual retrieval, routing
+  ollama_url:  "http://localhost:11434"
+  max_tokens:  2000
+
+kg:
+  extraction_batch_size: 50
+  synonymy_threshold:    0.8    # cosine similarity threshold for synonym edges
+  ppr_alpha:             0.85   # Personalized PageRank damping factor
+  ppr_max_iter:          30
+
+raptor:
+  max_levels:        3
+  cluster_size:      10
+  min_cluster_items: 3
+
+contextual:
+  batch_size:          20
+  max_doc_preview_chars: 3000
+
+watcher:
+  poll_interval:   60   # seconds between directory scans
+  stability_delay:  5   # seconds a file must be stable before ingesting
+
+chunking:
+  max_tokens: 600
+  min_tokens:  50
+
+evaluation:
+  default_n_questions: 50
+  question_distribution:
+    extractive:  0.4
+    abstractive: 0.4
+    multi_hop:   0.2
+
+retrieval_memory:
+  alpha:                0.15   # novelty penalty weight
+  utility_boost_weight: 0.3    # weight of helpfulness signal
+
+adversarial:
+  n_queries:             20
+  blind_spot_threshold:  0.3
+  schedule_hours:        24    # how often to run adversarial self-tests
