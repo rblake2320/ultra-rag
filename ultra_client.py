@@ -43,6 +43,7 @@ _CANDIDATE_URLS = [
     "http://localhost:8300",                        # 2. Local (running on hub)
     "http://192.168.12.198:8300",                  # 3. LAN (same network as hub)
     "http://192.168.12.132:8300",                  # 4. Spark-1 if it runs one
+    "http://76.13.118.222:8300",                   # 5. VPS (always-on, permanent)
 ]
 _API_KEY   = os.environ.get("ULTRA_RAG_API_KEY", "")
 _SYSTEM_ID = os.environ.get("ULTRA_RAG_SYSTEM_ID", socket.gethostname())
