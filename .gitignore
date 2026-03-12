@@ -1,0 +1,24 @@
+# Python
+*.pyc
+__pycache__/
+.venv/
+dist/
+
+# Credentials / config with secrets
+config.yaml
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+
+# Databases
+*.db
+
+# Training / data files
+*.jsonl
+
+# Chroma export dir (large binary data)
+chroma-export/

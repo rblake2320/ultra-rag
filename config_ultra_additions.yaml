@@ -1,0 +1,62 @@
+# config_ultra_additions.yaml
+#
+# Ultra RAG configuration additions.
+# Merge these sections into config.yaml to enable the Ultra RAG feature set.
+#
+# Example merge command:
+#   python -c "
+#   import yaml, pathlib
+#   base = yaml.safe_load(open('config.yaml'))
+#   extra = yaml.safe_load(open('config_ultra_additions.yaml'))
+#   base.update(extra)
+#   open('config.yaml','w').write(yaml.dump(base, default_flow_style=False))
+#   "
+#
+# Or simply copy the sections below into config.yaml by hand.
+
+# ── LLM ──────────────────────────────────────────────────────────────────────
+llm:
+  provider: ollama
+  model: deepseek-r1:32b          # primary model (high-quality reasoning)
+  fast_model: gemma3:latest       # low-latency tasks (classification, routing)
+  ollama_url: "http://localhost:11434"
+  max_tokens: 2000
+  # Optional: Claude API fallback model when Ollama is unavailable
+  # claude_fallback_model: claude-3-haiku-20240307
+
+# ── Knowledge Graph ───────────────────────────────────────────────────────────
+kg:
+  extraction_batch_size: 50       # chunks per KG extraction batch
+  synonymy_threshold: 0.8         # cosine similarity threshold for synonymy edges
+  ppr_alpha: 0.85                 # Personalised PageRank damping factor
+  ppr_max_iter: 30                # max PPR iterations before convergence
+
+# ── RAPTOR Hierarchical Summarisation ─────────────────────────────────────────
+raptor:
+  max_levels: 3                   # maximum hierarchy depth
+  cluster_size: 10                # target entities/chunks per community summary
+  min_cluster_items: 3            # skip clustering below this count (degenerate guard)
+
+# ── Contextual Retrieval ───────────────────────────────────────────────────────
+contextual:
+  batch_size: 20                  # chunks processed per LLM batch
+  max_doc_preview_chars: 3000     # characters of document context injected per chunk
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+evaluation:
+  default_n_questions: 50         # auto-generated eval questions per run
+  question_distribution:
+    extractive: 0.4               # fraction of extractive (fact lookup) questions
+    abstractive: 0.4              # fraction of abstractive (synthesis) questions
+    multi_hop: 0.2                # fraction of multi-hop reasoning questions
+
+# ── Retrieval Memory (utility EMA) ────────────────────────────────────────────
+retrieval_memory:
+  alpha: 0.15                     # EMA learning rate (higher = faster adaptation)
+  utility_boost_weight: 0.3       # weight of utility_ema in the composite score
+
+# ── Adversarial Testing ───────────────────────────────────────────────────────
+adversarial:
+  n_queries: 20                   # adversarial queries generated per run
+  blind_spot_threshold: 0.3       # quality below this flags a blind spot
+  schedule_hours: 24              # interval between scheduled adversarial runs

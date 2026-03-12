@@ -1,0 +1,44 @@
+# Ultra RAG — additional dependencies
+# Install with:  pip install -r requirements_ultra.txt
+#
+# These are additions to the base requirements already installed.
+# scikit-learn, scipy, numpy, torch, and transformers are assumed present.
+
+# ── Knowledge Graph ─────────────────────────────────────────────────────────
+igraph>=0.11.0
+leidenalg>=0.10.0
+
+# ── Embeddings & Cross-encoder Reranking ────────────────────────────────────
+sentence-transformers>=3.0.0
+
+# ── Clustering (RAPTOR) ─────────────────────────────────────────────────────
+# scikit-learn already installed
+# scipy already installed
+
+# ── API Server ──────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.0.0
+
+# ── Evaluation ──────────────────────────────────────────────────────────────
+ragas>=0.2.0
+datasets>=3.0.0
+
+# ── Async & Utilities ───────────────────────────────────────────────────────
+httpx>=0.27.0
+numpy>=1.26.0
+tiktoken>=0.7.0
+
+# ── DOCX parsing (for multimodal image extraction) ──────────────────────────
+python-docx>=1.1.0
+
+# ── PDF parsing (for multimodal image extraction) ────────────────────────────
+# Choose one (or both):
+pypdf>=4.0.0
+# pdfplumber>=0.11.0    # uncomment if you prefer pdfplumber
+
+# ── Optional: Vision (LLaVA via Ollama is the primary path) ─────────────────
+# transformers already installed
+# torch already installed
+# Pillow is needed if you want to manipulate images locally before sending to VLM:
+Pillow>=10.0.0

@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ultra RAG — Knowledge Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            bg:      '#0f172a',
+            surface: '#1e293b',
+            card:    '#243044',
+            border:  '#334155',
+            muted:   '#64748b',
+            accent:  '#6366f1',
+            accentl: '#818cf8',
+            success: '#10b981',
+            warn:    '#f59e0b',
+            danger:  '#ef4444',
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          animation: {
+            'fade-in':   'fadeIn .3s ease-out',
+            'slide-up':  'slideUp .35s ease-out',
+            'pulse-dot': 'pulseDot 2s infinite',
+            'count-up':  'countUp .8s ease-out',
+          },
+          keyframes: {
+            fadeIn:   { from: { opacity: 0 },            to: { opacity: 1 } },
+            slideUp:  { from: { opacity: 0, transform: 'translateY(14px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
+            pulseDot: { '0%,100%': { opacity: 1 },       '50%': { opacity: .3 } },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+    /* skeleton shimmer */
+    .skeleton {
+      background: linear-gradient(90deg, #1e293b 25%, #243044 50%, #1e293b 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 6px;
+    }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+    /* score badge colors */
+    .score-high  { background: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .score-mid   { background: #451a03; color: #fbbf24; border: 1px solid #d97706; }
+    .score-low   { background: #450a0a; color: #f87171; border: 1px solid #dc2626; }
+
+    /* strategy pill colors */
+    .strat-hybrid     { background: #1e1b4b; color: #a5b4fc; border: 1px solid #4338ca; }
+    .strat-kg_local   { background: #0c4a6e; color: #7dd3fc; border: 1px solid #0284c7; }
+    .strat-kg_global  { background: #042f2e; color: #5eead4; border: 1px solid #0d9488; }
+    .strat-multi_hop  { background: #2e1065; color: #c4b5fd; border: 1px solid #7c3aed; }
+    .strat-hyde       { background: #450a0a; color: #fca5a5; border: 1px solid #b91c1c; }
+    .strat-compound   { background: #1c1917; color: #d6d3d1; border: 1px solid #78716c; }
+    .strat-auto       { background: #1e1b4b; color: #a5b4fc; border: 1px solid #4338ca; }
+
+    /* type pill */
+    .type-text           { background: #1e293b; color: #94a3b8; }
+    .type-field_definition { background: #1e3a2f; color: #6ee7b7; }
+    .type-table          { background: #1e3050; color: #93c5fd; }
+    .type-screen_print   { background: #2d1e3e; color: #c4b5fd; }
+    .type-procedure      { background: #3b2200; color: #fcd34d; }
+    .type-summary        { background: #1c1917; color: #d6d3d1; }
+
+    /* drag-and-drop */
+    .drop-zone { transition: border-color .2s, background .2s; }
+    .drop-zone.drag-over { border-color: #6366f1; background: #1e1b4b55; }
+
+    /* result card */
+    .result-card { transition: transform .15s, box-shadow .15s; }
+    .result-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px #0008; }
+
+    /* tabs */
+    .tab-btn { transition: color .15s, border-color .15s; }
+    .tab-btn.active { color: #6366f1; border-bottom: 2px solid #6366f1; }
+
+    /* progress bar */
+    .progress-bar { transition: width .8s cubic-bezier(.4,0,.2,1); }
+
+    /* toast */
+    #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; display: flex; flex-direction: column; gap: .5rem; }
+    .toast { display: flex; align-items: center; gap: .75rem; padding: .75rem 1.25rem; border-radius: .5rem; font-size: .875rem; font-weight: 500; animation: slideUp .3s ease-out; box-shadow: 0 8px 32px #0008; min-width: 280px; }
+    .toast-success { background: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .toast-error   { background: #450a0a; color: #f87171;  border: 1px solid #b91c1c; }
+    .toast-info    { background: #1e1b4b; color: #a5b4fc;  border: 1px solid #4338ca; }
+
+    /* entity card hover */
+    .entity-card { cursor: pointer; transition: background .15s, border-color .15s; }
+    .entity-card:hover { background: #1e1b4b55; border-color: #6366f1; }
+
+    /* toggle switch */
+    .toggle-track { transition: background .2s; }
+    .toggle-thumb { transition: transform .2s; }
+    input:checked + .toggle-track { background: #6366f1; }
+    input:checked + .toggle-track .toggle-thumb { transform: translateX(18px); }
+
+    /* collapsible */
+    .collapsible-content { max-height: 0; overflow: hidden; transition: max-height .3s ease; }
+    .collapsible-content.open { max-height: 600px; }
+
+    /* Number counter animation */
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .stat-num { display: inline-block; animation: countUp .6s ease-out both; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- ── Toast Container ───────────────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header class="sticky top-0 z-50 border-b border-border bg-surface/90 backdrop-blur-sm">
+  <div class="max-w-screen-2xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+
+    <!-- Logo -->
+    <div class="flex items-center gap-3 flex-shrink-0">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-violet-700 flex items-center justify-center shadow-lg shadow-accent/30">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" class="w-5 h-5">
+          <circle cx="12" cy="5"  r="2"/>
+          <circle cx="5"  cy="19" r="2"/>
+          <circle cx="19" cy="19" r="2"/>
+          <circle cx="12" cy="12" r="2.5"/>
+          <line x1="12" y1="7"  x2="12" y2="9.5"/>
+          <line x1="10" y1="13.5" x2="6.5" y2="17.2"/>
+          <line x1="14" y1="13.5" x2="17.5" y2="17.2"/>
+        </svg>
+      </div>
+      <div>
+        <span class="font-extrabold text-lg tracking-tight">Ultra RAG</span>
+        <span class="text-xs text-muted ml-2 hidden sm:inline">Knowledge Intelligence Platform</span>
+      </div>
+    </div>
+
+    <!-- Center: collection selector -->
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-muted font-medium">Collection</label>
+      <select id="global-collection" class="bg-card border border-border text-sm rounded-lg px-3 py-1.5 text-white focus:outline-none focus:ring-2 focus:ring-accent/50 cursor-pointer">
+        <option value="imds">imds</option>
+      </select>
+    </div>
+
+    <!-- Right: status + refresh -->
+    <div class="flex items-center gap-4">
+      <div id="health-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-card text-xs font-medium">
+        <span id="health-dot" class="w-2 h-2 rounded-full bg-muted"></span>
+        <span id="health-text">Checking…</span>
+      </div>
+      <button onclick="refreshAll()" class="p-2 rounded-lg border border-border bg-card hover:border-accent/60 hover:text-accentl transition-colors" title="Refresh all">
+        <svg id="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4">
+          <path d="M4 4v5h5M20 20v-5h-5"/>
+          <path d="M20 9A8 8 0 0 0 7.9 4.5M4 15a8 8 0 0 0 12.1 4.5"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main Layout ─────────────────────────────────────────────────────── -->
+<div class="max-w-screen-2xl mx-auto px-6 py-6 space-y-6">
+
+  <!-- ── Stats Row ────────────────────────────────────────────────────── -->
+  <section id="stats-section">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+      <!-- Cards filled by JS -->
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+      <div class="stat-card skeleton h-24 rounded-xl"></div>
+    </div>
+  </section>
+
+  <!-- ── Two-column layout: search (wide) + sidebar (narrow) ──────────── -->
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+    <!-- ── LEFT: Search + Results ─────────────────────────────────────── -->
+    <div class="xl:col-span-2 space-y-4">
+
+      <!-- Search Panel -->
+      <div class="bg-card rounded-2xl border border-border p-5 shadow-xl">
+        <div class="flex items-center gap-2 mb-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" class="w-5 h-5 flex-shrink-0">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <h2 class="font-bold text-base">Semantic Search</h2>
+        </div>
+
+        <!-- Query input -->
+        <div class="relative mb-3">
+          <input id="search-input" type="text"
+            placeholder="Ask anything about IMDS, equipment, work centers…"
+            class="w-full bg-surface border border-border rounded-xl px-4 py-3 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent/50 placeholder-muted transition-all"
+            onkeydown="if(event.key==='Enter') runSearch()" />
+          <button onclick="runSearch()" class="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-lg bg-accent hover:bg-accentl transition-colors">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" class="w-4 h-4">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Controls row -->
+        <div class="flex flex-wrap gap-3 items-center">
+          <!-- Strategy -->
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-muted font-medium whitespace-nowrap">Strategy</label>
+            <select id="search-strategy" class="bg-surface border border-border text-xs rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:ring-2 focus:ring-accent/50 cursor-pointer">
+              <option value="">Auto</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="kg_local">KG Local</option>
+              <option value="kg_global">KG Global</option>
+              <option value="multi_hop">Multi-Hop</option>
+              <option value="hyde">HyDE</option>
+              <option value="compound">Compound</option>
+            </select>
+          </div>
+
+          <!-- Top-K -->
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-muted font-medium whitespace-nowrap">Top-K</label>
+            <input id="top-k" type="range" min="1" max="20" value="5"
+              class="w-24 accent-accent cursor-pointer"
+              oninput="document.getElementById('top-k-val').textContent=this.value" />
+            <span id="top-k-val" class="text-xs font-mono w-5 text-center text-accentl">5</span>
+          </div>
+
+          <!-- Toggles -->
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="include-parent" class="sr-only" />
+            <span class="w-9 h-5 bg-surface border border-border rounded-full flex items-center px-0.5 toggle-track">
+              <span class="w-4 h-4 bg-muted rounded-full toggle-thumb"></span>
+            </span>
+            <span class="text-xs text-muted">Parent ctx</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="include-provenance" class="sr-only" />
+            <span class="w-9 h-5 bg-surface border border-border rounded-full flex items-center px-0.5 toggle-track">
+              <span class="w-4 h-4 bg-muted rounded-full toggle-thumb"></span>
+            </span>
+            <span class="text-xs text-muted">Provenance</span>
+          </label>
+
+          <button onclick="runSearch()" id="search-btn"
+            class="ml-auto px-4 py-1.5 rounded-lg bg-accent hover:bg-accentl text-white text-xs font-semibold transition-colors flex items-center gap-2">
+            <span id="search-btn-text">Search</span>
+            <div id="search-spinner" class="hidden w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Results area -->
+      <div id="results-area" class="space-y-3 animate-fade-in hidden">
+
+        <!-- Results header -->
+        <div id="results-header" class="flex items-center justify-between px-1">
+          <div class="flex items-center gap-3">
+            <span class="text-sm font-semibold text-white" id="result-count"></span>
+            <span id="strategy-pill" class="text-xs px-2.5 py-1 rounded-full font-medium"></span>
+          </div>
+          <div class="flex items-center gap-4 text-xs text-muted">
+            <span>Quality: <span id="quality-score" class="text-accentl font-semibold"></span></span>
+            <span>Latency: <span id="latency-ms" class="text-accentl font-semibold"></span>ms</span>
+          </div>
+        </div>
+
+        <!-- Result cards injected here -->
+        <div id="results-list" class="space-y-3"></div>
+      </div>
+
+      <!-- Empty state -->
+      <div id="search-empty" class="bg-card/50 rounded-2xl border border-dashed border-border p-10 text-center">
+        <div class="w-16 h-16 rounded-2xl bg-surface mx-auto mb-4 flex items-center justify-center">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5" class="w-8 h-8">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+        </div>
+        <p class="text-muted text-sm">Enter a query above to search your knowledge base</p>
+        <p class="text-muted/60 text-xs mt-1">Try: "how to enter equipment ID" or "XMIT key function"</p>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT SIDEBAR ─────────────────────────────────────────────── -->
+    <div class="space-y-4">
+
+      <!-- Upload Panel -->
+      <div class="bg-card rounded-2xl border border-border p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" class="w-5 h-5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <h2 class="font-bold text-base">Upload Document</h2>
+          </div>
+        </div>
+
+        <!-- Drop zone -->
+        <div id="drop-zone" class="drop-zone border-2 border-dashed border-border rounded-xl p-6 text-center cursor-pointer mb-3 hover:border-accent/50 transition-colors"
+          onclick="document.getElementById('file-input').click()"
+          ondragover="e=>{e.preventDefault();this.classList.add('drag-over')}"
+          ondragleave="e=>{this.classList.remove('drag-over')}"
+          ondrop="handleDrop(event)">
+          <input type="file" id="file-input" class="hidden" multiple accept=".pdf,.docx,.txt,.md,.csv,.json,.html" onchange="handleFiles(this.files)" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5" class="w-10 h-10 mx-auto mb-2">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+            <path d="M12 8v8M8 12h8"/>
+          </svg>
+          <p class="text-sm text-muted">Drop files here or <span class="text-accentl">click to browse</span></p>
+          <p class="text-xs text-muted/60 mt-1">PDF · DOCX · TXT · MD · CSV · JSON · HTML</p>
+        </div>
+
+        <!-- Collection for upload -->
+        <div class="flex items-center gap-2 mb-3">
+          <label class="text-xs text-muted font-medium">Target</label>
+          <select id="upload-collection" class="flex-1 bg-surface border border-border text-xs rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:ring-2 focus:ring-accent/50 cursor-pointer">
+            <option value="imds">imds</option>
+          </select>
+        </div>
+
+        <!-- File list -->
+        <div id="file-list" class="space-y-2 mb-3 hidden"></div>
+
+        <!-- Progress bar -->
+        <div id="upload-progress-wrap" class="hidden mb-3">
+          <div class="flex justify-between text-xs text-muted mb-1">
+            <span id="upload-progress-label">Uploading…</span>
+            <span id="upload-progress-pct">0%</span>
+          </div>
+          <div class="w-full h-1.5 bg-surface rounded-full overflow-hidden">
+            <div id="upload-progress-bar" class="progress-bar h-full bg-accent rounded-full" style="width:0%"></div>
+          </div>
+        </div>
+
+        <button id="upload-btn" onclick="startUpload()" disabled
+          class="w-full py-2 rounded-lg bg-accent/30 text-muted text-xs font-semibold transition-all cursor-not-allowed disabled:opacity-50">
+          Upload &amp; Ingest
+        </button>
+      </div>
+
+      <!-- Pipeline Status -->
+      <div class="bg-card rounded-2xl border border-border p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" class="w-5 h-5">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M9 9h6M9 13h6M9 17h4"/>
+            </svg>
+            <h2 class="font-bold text-base">Pipeline Status</h2>
+          </div>
+          <button onclick="loadStats()" class="text-xs text-muted hover:text-accentl transition-colors px-2 py-1 rounded border border-border hover:border-accent/50">Refresh</button>
+        </div>
+        <div id="pipeline-bars" class="space-y-3">
+          <div class="skeleton h-8 rounded-lg"></div>
+          <div class="skeleton h-8 rounded-lg"></div>
+          <div class="skeleton h-8 rounded-lg"></div>
+          <div class="skeleton h-8 rounded-lg"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Knowledge Graph Panel ────────────────────────────────────────── -->
+  <section class="bg-card rounded-2xl border border-border shadow-xl overflow-hidden">
+    <!-- Tabs -->
+    <div class="border-b border-border px-5 flex gap-1">
+      <button class="tab-btn active text-sm font-medium py-3.5 px-1 mr-4 border-b-2 border-transparent" onclick="switchTab('entities', this)">
+        Entities
+      </button>
+      <button class="tab-btn text-sm font-medium text-muted py-3.5 px-1 mr-4 border-b-2 border-transparent" onclick="switchTab('communities', this)">
+        Communities
+      </button>
+      <button class="tab-btn text-sm font-medium text-muted py-3.5 px-1 border-b-2 border-transparent" onclick="switchTab('health', this)">
+        System Health
+      </button>
+    </div>
+
+    <div class="p-5">
+      <!-- Entities tab -->
+      <div id="tab-entities">
+        <div class="flex items-center justify-between mb-4">
+          <p class="text-xs text-muted">Click an entity to run a KG Local search</p>
+          <div class="flex gap-2">
+            <input id="entity-search" type="text" placeholder="Filter entities…"
+              class="bg-surface border border-border text-xs rounded-lg px-3 py-1.5 w-40 focus:outline-none focus:ring-2 focus:ring-accent/50 placeholder-muted"
+              oninput="filterEntities(this.value)" />
+            <select id="entity-type-filter" class="bg-surface border border-border text-xs rounded-lg px-2 py-1.5 text-white focus:outline-none cursor-pointer"
+              onchange="loadEntities()">
+              <option value="">All types</option>
+              <option value="SYSTEM">System</option>
+              <option value="SCREEN">Screen</option>
+              <option value="EQUIPMENT">Equipment</option>
+              <option value="WORK_CENTER">Work Center</option>
+              <option value="PROCEDURE">Procedure</option>
+              <option value="ERROR_CODE">Error Code</option>
+              <option value="FIELD">Field</option>
+            </select>
+          </div>
+        </div>
+        <div id="entities-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+        </div>
+      </div>
+
+      <!-- Communities tab (hidden) -->
+      <div id="tab-communities" class="hidden">
+        <div id="communities-list" class="space-y-2">
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+          <div class="skeleton h-16 rounded-lg"></div>
+        </div>
+      </div>
+
+      <!-- Health tab (hidden) -->
+      <div id="tab-health" class="hidden">
+        <div id="health-detail" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="skeleton h-20 rounded-xl"></div>
+          <div class="skeleton h-20 rounded-xl"></div>
+          <div class="skeleton h-20 rounded-xl"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div><!-- /max-w -->
+
+<!-- ── Result Card Template (hidden) ──────────────────────────────────── -->
+<template id="result-card-tmpl">
+  <div class="result-card bg-card rounded-xl border border-border p-4 animate-slide-up shadow-lg">
+    <div class="flex items-start justify-between gap-3 mb-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="score-badge text-xs font-mono font-bold px-2 py-0.5 rounded-md"></span>
+        <span class="type-badge text-xs px-2 py-0.5 rounded-md font-medium"></span>
+      </div>
+      <div class="flex gap-2 flex-shrink-0">
+        <button class="collapse-btn text-xs text-muted hover:text-accentl transition-colors px-2 py-0.5 rounded border border-border hover:border-accent/50">
+          Details ▾
+        </button>
+      </div>
+    </div>
+
+    <!-- Context prefix -->
+    <div class="context-prefix hidden mb-2 px-3 py-1.5 bg-surface rounded-lg border-l-2 border-accent/50">
+      <p class="text-xs text-muted/80 font-medium uppercase tracking-wide mb-0.5">Context</p>
+      <p class="text-xs text-accentl/80 context-prefix-text font-mono leading-relaxed"></p>
+    </div>
+
+    <!-- Content -->
+    <p class="content-text text-sm leading-relaxed text-slate-300 line-clamp-4"></p>
+
+    <!-- Collapsible details -->
+    <div class="collapsible-content mt-3 space-y-3">
+      <!-- Metadata -->
+      <div class="metadata-section hidden">
+        <p class="text-xs text-muted font-medium uppercase tracking-wide mb-1">Metadata</p>
+        <div class="metadata-grid flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- Rerank / utility scores -->
+      <div class="scores-row flex gap-4 text-xs text-muted">
+        <span class="rerank-wrap hidden">Rerank: <span class="rerank-score font-mono text-warn"></span></span>
+        <span class="utility-wrap hidden">Utility: <span class="utility-score font-mono text-success"></span></span>
+      </div>
+
+      <!-- Parent context -->
+      <div class="parent-section hidden">
+        <p class="text-xs text-muted font-medium uppercase tracking-wide mb-1">Parent Context</p>
+        <div class="parent-content text-xs text-slate-400 bg-surface rounded-lg p-3 font-mono leading-relaxed border border-border/50 line-clamp-6"></div>
+      </div>
+
+      <!-- Provenance -->
+      <div class="provenance-section hidden">
+        <p class="text-xs text-muted font-medium uppercase tracking-wide mb-1">Provenance Components</p>
+        <div class="provenance-grid flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ── JS ─────────────────────────────────────────────────────────────── -->
+<script>
+'use strict';
+
+const API = 'http://localhost:8300';
+let allEntities = [];
+let statsData   = {};
+let healthData  = {};
+
+// ── Utilities ─────────────────────────────────────────────────────────
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
+  el.innerHTML = `<span class="text-base">${icon}</span><span>${msg}</span>`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+function api(path, opts = {}) {
+  return fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts })
+    .then(r => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); });
+}
+
+function stratClass(s) {
+  const m = { hybrid:'strat-hybrid', kg_local:'strat-kg_local', kg_global:'strat-kg_global',
+              multi_hop:'strat-multi_hop', hyde:'strat-hyde', compound:'strat-compound' };
+  return m[s] || 'strat-auto';
+}
+
+function scoreClass(s) {
+  if (s >= 0.75) return 'score-high';
+  if (s >= 0.4)  return 'score-mid';
+  return 'score-low';
+}
+
+function typeClass(t) {
+  return `type-${(t || 'text').replace(/[^a-z_]/g,'')}`;
+}
+
+function animateNumber(el, target, decimals = 0, duration = 1000) {
+  const start = performance.now();
+  function step(ts) {
+    const pct = Math.min((ts - start) / duration, 1);
+    const ease = 1 - Math.pow(1 - pct, 3);
+    el.textContent = (target * ease).toFixed(decimals);
+    if (pct < 1) requestAnimationFrame(step);
+    else el.textContent = target.toFixed(decimals);
+  }
+  requestAnimationFrame(step);
+}
+
+function progressBar(label, value, max, color = '#6366f1') {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  return `
+    <div>
+      <div class="flex justify-between text-xs mb-1">
+        <span class="text-slate-400">${label}</span>
+        <span class="font-mono text-slate-300">${value.toLocaleString()} <span class="text-muted">/ ${max.toLocaleString()}</span></span>
+      </div>
+      <div class="w-full h-1.5 bg-surface rounded-full overflow-hidden">
+        <div class="progress-bar h-full rounded-full" style="width:${pct}%; background:${color}"></div>
+      </div>
+    </div>`;
+}
+
+// ── Collection selector sync ──────────────────────────────────────────
+
+document.getElementById('global-collection').addEventListener('change', function() {
+  const col = this.value;
+  document.getElementById('upload-collection').value = col;
+  loadStats();
+  loadEntities();
+  loadCommunities();
+});
+
+function getCollection() { return document.getElementById('global-collection').value; }
+
+// ── Health ─────────────────────────────────────────────────────────────
+
+async function loadHealth() {
+  try {
+    healthData = await api('/api/health');
+    const ok = healthData.status === 'ok';
+    const dot  = document.getElementById('health-dot');
+    const text = document.getElementById('health-text');
+    dot.className  = `w-2 h-2 rounded-full ${ok ? 'bg-success animate-pulse-dot' : 'bg-danger'}`;
+    text.textContent = ok ? 'Healthy' : 'Degraded';
+    document.getElementById('health-badge').className =
+      `flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium ${ok ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`;
+    renderHealthTab();
+  } catch (e) {
+    const dot  = document.getElementById('health-dot');
+    dot.className = 'w-2 h-2 rounded-full bg-danger';
+    document.getElementById('health-text').textContent = 'Unreachable';
+  }
+}
+
+function renderHealthTab() {
+  if (!healthData.status) return;
+  const checks = [
+    { label: 'PostgreSQL', key: 'db',       icon: '🗄️' },
+    { label: 'pgvector',   key: 'pgvector',  icon: '⚡' },
+    { label: 'Ollama LLM', key: 'ollama',    icon: '🤖' },
+  ];
+  const html = checks.map(c => {
+    const val = healthData[c.key] || 'unknown';
+    const ok  = val === 'ok';
+    return `
+      <div class="bg-surface rounded-xl border ${ok ? 'border-success/20' : 'border-danger/20'} p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xl">${c.icon}</span>
+          <span class="font-semibold text-sm">${c.label}</span>
+          <span class="ml-auto w-2.5 h-2.5 rounded-full ${ok ? 'bg-success' : 'bg-danger'}"></span>
+        </div>
+        <p class="text-xs font-mono ${ok ? 'text-success' : 'text-danger/80'} truncate">${val}</p>
+        <p class="text-xs text-muted mt-1">${healthData.timestamp ? new Date(healthData.timestamp).toLocaleTimeString() : ''}</p>
+      </div>`;
+  }).join('');
+  document.getElementById('health-detail').innerHTML = html;
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  const col = getCollection();
+  try {
+    statsData = await api(`/api/stats?collection=${col}`);
+    renderStats(statsData);
+    renderPipelineBars(statsData);
+  } catch (e) {
+    document.getElementById('stats-section').innerHTML =
+      `<div class="text-center text-danger text-sm py-6">Failed to load stats: ${e.message}</div>`;
+  }
+}
+
+const STAT_DEFS = [
+  { key: 'chunks',         label: 'Chunks Indexed',       icon: '📄', color: '#6366f1' },
+  { key: 'embedded_chunks',label: 'Embedded',             icon: '⚡', color: '#8b5cf6' },
+  { key: 'entities',       label: 'Entities',             icon: '🔗', color: '#06b6d4' },
+  { key: 'communities',    label: 'Communities',          icon: '🌐', color: '#10b981' },
+  { key: 'documents',      label: 'Documents',            icon: '📚', color: '#f59e0b' },
+  { key: 'parent_chunks',  label: 'Parent Chunks',        icon: '🗂️', color: '#ec4899' },
+];
+
+function renderStats(data) {
+  const el = document.getElementById('stats-section');
+  el.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+    ${STAT_DEFS.map(d => `
+      <div class="bg-card rounded-xl border border-border p-4 shadow-lg hover:border-accent/40 transition-colors">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-lg">${d.icon}</span>
+          <div class="w-8 h-1 rounded-full" style="background:${d.color}30"></div>
+        </div>
+        <div class="stat-num text-2xl font-extrabold text-white" data-target="${data[d.key] || 0}" data-color="${d.color}" style="color:${d.color}">0</div>
+        <p class="text-xs text-muted mt-1 truncate">${d.label}</p>
+      </div>
+    `).join('')}
+  </div>`;
+
+  // animate numbers
+  document.querySelectorAll('.stat-num').forEach(el => {
+    const target = parseInt(el.dataset.target) || 0;
+    animateNumber(el, target, 0, 900);
+  });
+}
+
+function renderPipelineBars(data) {
+  const chunks = data.chunks || 0;
+  const html = [
+    progressBar('Embedded chunks',  data.embedded_chunks  || 0, chunks, '#6366f1'),
+    progressBar('Parent chunks',    data.parent_chunks    || 0, chunks, '#ec4899'),
+    progressBar('KG extraction',    data.kg_chunks_done   || 0, chunks, '#06b6d4'),
+    progressBar('Contextual ctx',   data.contextual_done  || 0, chunks, '#8b5cf6'),
+    progressBar('RAPTOR summaries', data.summaries        || 0, Math.max(data.summaries||0, 50), '#f59e0b'),
+    progressBar('Entities',         data.entities         || 0, Math.max(data.entities||0, 1000), '#06b6d4'),
+    progressBar('Communities',      data.communities      || 0, Math.max(data.communities||0, 1), '#10b981'),
+  ].join('');
+  document.getElementById('pipeline-bars').innerHTML = `<div class="space-y-3">${html}</div>`;
+  // trigger CSS transition
+  setTimeout(() => document.querySelectorAll('.progress-bar').forEach(b => {
+    const w = b.style.width; b.style.width = '0'; setTimeout(() => b.style.width = w, 50);
+  }), 100);
+}
+
+// ── Collections ────────────────────────────────────────────────────────
+
+async function loadCollections() {
+  try {
+    const data = await api('/api/collections');
+    const cols = data.collections || [];
+    if (!cols.length) return;
+    const opts = cols.map(c => `<option value="${c}">${c}</option>`).join('');
+    ['global-collection','upload-collection'].forEach(id => {
+      document.getElementById(id).innerHTML = opts;
+    });
+  } catch (_) { /* use defaults */ }
+}
+
+// ── Search ─────────────────────────────────────────────────────────────
+
+async function runSearch(queryOverride) {
+  const q = queryOverride || document.getElementById('search-input').value.trim();
+  if (!q) { toast('Enter a query first', 'error'); return; }
+
+  const btn     = document.getElementById('search-btn');
+  const spinner = document.getElementById('search-spinner');
+  const btnText = document.getElementById('search-btn-text');
+
+  btn.disabled = true; spinner.classList.remove('hidden'); btnText.textContent = 'Searching…';
+  document.getElementById('results-area').classList.add('hidden');
+  document.getElementById('search-empty').classList.add('hidden');
+
+  const strategy = document.getElementById('search-strategy').value || null;
+  const top_k    = parseInt(document.getElementById('top-k').value);
+  const incPar   = document.getElementById('include-parent').checked;
+  const incProv  = document.getElementById('include-provenance').checked;
+
+  try {
+    const res = await api('/api/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        query: q, collection: getCollection(), top_k, strategy,
+        include_parent: incPar, include_provenance: incProv,
+      }),
+    });
+
+    renderResults(res);
+    document.getElementById('results-area').classList.remove('hidden');
+  } catch (e) {
+    toast(`Search failed: ${e.message}`, 'error');
+    document.getElementById('search-empty').classList.remove('hidden');
+  } finally {
+    btn.disabled = false; spinner.classList.add('hidden'); btnText.textContent = 'Search';
+  }
+}
+
+function renderResults(data) {
+  const results = data.results || [];
+  document.getElementById('result-count').textContent = `${results.length} result${results.length !== 1 ? 's' : ''}`;
+
+  const sp = document.getElementById('strategy-pill');
+  const s  = data.strategy_used || 'hybrid';
+  sp.className   = `text-xs px-2.5 py-1 rounded-full font-medium ${stratClass(s)}`;
+  sp.textContent = s.replace(/_/g,' ').toUpperCase();
+
+  document.getElementById('quality-score').textContent = ((data.quality_score || 0) * 100).toFixed(0) + '%';
+  document.getElementById('latency-ms').textContent    = data.latency_ms || 0;
+
+  const list = document.getElementById('results-list');
+  list.innerHTML = '';
+
+  if (!results.length) {
+    list.innerHTML = `<div class="text-center text-muted py-8 bg-card/50 rounded-xl border border-dashed border-border">No results found. Try a different query or strategy.</div>`;
+    return;
+  }
+
+  const tmpl = document.getElementById('result-card-tmpl');
+  results.forEach((r, idx) => {
+    const card = tmpl.content.cloneNode(true).firstElementChild;
+    card.style.animationDelay = `${idx * 60}ms`;
+
+    // Score badge
+    const score = r.score || 0;
+    const sb = card.querySelector('.score-badge');
+    sb.className = `score-badge text-xs font-mono font-bold px-2 py-0.5 rounded-md ${scoreClass(score)}`;
+    sb.textContent = score.toFixed(3);
+
+    // Type badge
+    const ct = r.content_type || 'text';
+    const tb = card.querySelector('.type-badge');
+    tb.className = `type-badge text-xs px-2 py-0.5 rounded-md font-medium ${typeClass(ct)}`;
+    tb.textContent = ct.replace(/_/g,' ');
+
+    // Context prefix
+    if (r.context_prefix) {
+      card.querySelector('.context-prefix').classList.remove('hidden');
+      card.querySelector('.context-prefix-text').textContent = r.context_prefix.slice(0, 200);
+    }
+
+    // Content
+    card.querySelector('.content-text').textContent = r.content || '';
+
+    // Rerank / utility
+    if (r.rerank_score != null) {
+      card.querySelector('.rerank-wrap').classList.remove('hidden');
+      card.querySelector('.rerank-score').textContent = r.rerank_score.toFixed(3);
+    }
+    if (r.utility_score != null) {
+      card.querySelector('.utility-wrap').classList.remove('hidden');
+      card.querySelector('.utility-score').textContent = r.utility_score.toFixed(3);
+    }
+
+    // Metadata chips
+    const meta = r.chunk_metadata;
+    if (meta && Object.keys(meta).length) {
+      const grid = card.querySelector('.metadata-grid');
+      card.querySelector('.metadata-section').classList.remove('hidden');
+      const SHOW = ['screen_id','section','source_file','doc_name','page'];
+      SHOW.forEach(k => {
+        if (meta[k] != null) {
+          const chip = document.createElement('span');
+          chip.className = 'text-xs bg-surface border border-border rounded-md px-2 py-0.5 font-mono text-muted';
+          chip.textContent = `${k}: ${meta[k]}`;
+          grid.appendChild(chip);
+        }
+      });
+    }
+
+    // Parent context
+    if (r.parent_content) {
+      card.querySelector('.parent-section').classList.remove('hidden');
+      card.querySelector('.parent-content').textContent = r.parent_content;
+    }
+
+    // Provenance
+    if (r.provenance_components) {
+      const ps = card.querySelector('.provenance-section');
+      ps.classList.remove('hidden');
+      const pg = card.querySelector('.provenance-grid');
+      Object.entries(r.provenance_components).forEach(([k, v]) => {
+        const chip = document.createElement('span');
+        chip.className = 'text-xs bg-surface border border-border rounded-md px-2 py-0.5 font-mono text-accentl/80';
+        chip.textContent = `${k}: ${typeof v === 'number' ? v.toFixed(3) : v}`;
+        pg.appendChild(chip);
+      });
+    }
+
+    // Collapse toggle
+    card.querySelector('.collapse-btn').addEventListener('click', function() {
+      const cc = card.querySelector('.collapsible-content');
+      const open = cc.classList.toggle('open');
+      this.textContent = open ? 'Details ▴' : 'Details ▾';
+    });
+
+    list.appendChild(card);
+  });
+}
+
+// ── Entities ───────────────────────────────────────────────────────────
+
+async function loadEntities() {
+  const col  = getCollection();
+  const type = document.getElementById('entity-type-filter').value;
+  const grid = document.getElementById('entities-grid');
+  grid.innerHTML = Array(5).fill('<div class="skeleton h-16 rounded-lg"></div>').join('');
+
+  try {
+    const data = await api('/api/entities?' + new URLSearchParams({
+      collection: col, limit: 40, ...(type ? { entity_type: type } : {})
+    }));
+    allEntities = data.entities || [];
+    renderEntities(allEntities);
+  } catch (e) {
+    grid.innerHTML = `<div class="col-span-full text-center text-danger text-sm py-4">${e.message}</div>`;
+  }
+}
+
+function renderEntities(list) {
+  const grid = document.getElementById('entities-grid');
+  if (!list.length) {
+    grid.innerHTML = `<div class="col-span-full text-center text-muted py-6 text-sm">No entities found</div>`;
+    return;
+  }
+  grid.innerHTML = list.map(e => {
+    const typeColors = {
+      SYSTEM: 'text-blue-400 bg-blue-950/50 border-blue-800/50',
+      SCREEN: 'text-purple-400 bg-purple-950/50 border-purple-800/50',
+      EQUIPMENT: 'text-amber-400 bg-amber-950/50 border-amber-800/50',
+      WORK_CENTER: 'text-emerald-400 bg-emerald-950/50 border-emerald-800/50',
+      PROCEDURE: 'text-cyan-400 bg-cyan-950/50 border-cyan-800/50',
+      ERROR_CODE: 'text-red-400 bg-red-950/50 border-red-800/50',
+      FIELD: 'text-indigo-400 bg-indigo-950/50 border-indigo-800/50',
+    };
+    const cls = typeColors[e.entity_type] || 'text-slate-400 bg-slate-800/50 border-slate-700/50';
+    return `
+      <div class="entity-card border rounded-xl p-3 bg-surface/50 border-border animate-fade-in"
+           onclick="entitySearch('${e.name.replace(/'/g,"\\'")}')" title="Search for ${e.name}">
+        <p class="text-sm font-semibold text-white truncate mb-1">${e.name}</p>
+        <span class="inline-block text-xs px-1.5 py-0.5 rounded-md border font-medium ${cls}">${e.entity_type || 'UNKNOWN'}</span>
+      </div>`;
+  }).join('');
+}
+
+function filterEntities(term) {
+  if (!term) { renderEntities(allEntities); return; }
+  const t = term.toLowerCase();
+  renderEntities(allEntities.filter(e => e.name.toLowerCase().includes(t) || (e.entity_type||'').toLowerCase().includes(t)));
+}
+
+function entitySearch(name) {
+  document.getElementById('search-input').value = name;
+  document.getElementById('search-strategy').value = 'kg_local';
+  runSearch(name);
+  document.getElementById('search-input').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ── Communities ────────────────────────────────────────────────────────
+
+async function loadCommunities() {
+  const col = getCollection();
+  const list = document.getElementById('communities-list');
+  list.innerHTML = Array(3).fill('<div class="skeleton h-16 rounded-lg"></div>').join('');
+
+  try {
+    const data = await api('/api/communities?' + new URLSearchParams({ collection: col, limit: 20 }));
+    const communities = data.communities || [];
+    if (!communities.length) {
+      list.innerHTML = `<div class="text-center text-muted py-6 text-sm">No communities detected yet.<br><span class="text-xs">Run the KG pipeline to detect communities.</span></div>`;
+      return;
+    }
+    list.innerHTML = communities.map(c => `
+      <div class="bg-surface rounded-xl border border-border p-4 hover:border-accent/40 transition-colors">
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-mono text-muted bg-card px-1.5 py-0.5 rounded border border-border">L${c.level}</span>
+              <p class="text-sm font-semibold text-white truncate">${c.title || `Community ${c.id}`}</p>
+            </div>
+            ${c.summary ? `<p class="text-xs text-slate-400 line-clamp-2">${c.summary}</p>` : ''}
+          </div>
+          <div class="text-right flex-shrink-0">
+            <p class="text-lg font-bold text-accentl">${c.entity_count || 0}</p>
+            <p class="text-xs text-muted">entities</p>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="text-center text-danger text-sm py-4">${e.message}</div>`;
+  }
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────
+
+function switchTab(name, btn) {
+  ['entities','communities','health'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== name);
+  });
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  if (name === 'communities') loadCommunities();
+  if (name === 'health')      renderHealthTab();
+}
+
+// ── Upload ─────────────────────────────────────────────────────────────
+
+let pendingFiles = [];
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+}
+
+function handleFiles(files) {
+  const allowed = ['.pdf','.docx','.txt','.md','.csv','.json','.html'];
+  const newFiles = Array.from(files).filter(f => allowed.some(ext => f.name.toLowerCase().endsWith(ext)));
+  if (newFiles.length < files.length) toast(`Some files were skipped (unsupported format)`, 'error');
+  pendingFiles = [...pendingFiles, ...newFiles];
+  renderFileList();
+}
+
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  const btn  = document.getElementById('upload-btn');
+  if (!pendingFiles.length) {
+    list.classList.add('hidden');
+    btn.disabled = true;
+    btn.className = 'w-full py-2 rounded-lg bg-accent/30 text-muted text-xs font-semibold transition-all cursor-not-allowed';
+    return;
+  }
+  list.classList.remove('hidden');
+  list.innerHTML = pendingFiles.map((f, i) => {
+    const ext  = f.name.split('.').pop().toUpperCase();
+    const size = f.size > 1048576 ? `${(f.size/1048576).toFixed(1)}MB` : `${(f.size/1024).toFixed(0)}KB`;
+    return `
+      <div class="flex items-center gap-2 bg-surface rounded-lg px-3 py-2 border border-border text-xs">
+        <span class="font-mono bg-card px-1.5 py-0.5 rounded text-accentl border border-accent/20">${ext}</span>
+        <span class="flex-1 truncate text-slate-300">${f.name}</span>
+        <span class="text-muted">${size}</span>
+        <button onclick="removeFile(${i})" class="text-muted hover:text-danger transition-colors ml-1">✕</button>
+      </div>`;
+  }).join('');
+  btn.disabled = false;
+  btn.className = 'w-full py-2 rounded-lg bg-accent hover:bg-accentl text-white text-xs font-semibold transition-all cursor-pointer';
+}
+
+function removeFile(i) {
+  pendingFiles.splice(i, 1);
+  renderFileList();
+}
+
+async function startUpload() {
+  if (!pendingFiles.length) return;
+  const col = document.getElementById('upload-collection').value;
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true;
+
+  const wrap = document.getElementById('upload-progress-wrap');
+  const bar  = document.getElementById('upload-progress-bar');
+  const pct  = document.getElementById('upload-progress-pct');
+  const lbl  = document.getElementById('upload-progress-label');
+
+  wrap.classList.remove('hidden');
+  let uploaded = 0;
+  let totalChunks = 0;
+  const errors = [];
+
+  for (const file of pendingFiles) {
+    lbl.textContent = `Uploading ${file.name}…`;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('collection', col);
+    const p = Math.round(((uploaded + 0.5) / pendingFiles.length) * 100);
+    bar.style.width = `${p}%`;
+    pct.textContent = `${p}%`;
+    try {
+      const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json();
+      totalChunks += data.chunks_added || 0;
+      toast(`${file.name}: +${data.chunks_added || 0} chunks`, 'success');
+    } catch (e) {
+      errors.push(file.name);
+      toast(`${file.name}: upload failed`, 'error');
+    }
+    uploaded++;
+    bar.style.width = `${Math.round((uploaded / pendingFiles.length) * 100)}%`;
+    pct.textContent = `${Math.round((uploaded / pendingFiles.length) * 100)}%`;
+  }
+
+  lbl.textContent = errors.length ? `Done — ${errors.length} error(s)` : `Done! +${totalChunks} chunks indexed`;
+  pendingFiles = [];
+  renderFileList();
+  setTimeout(() => { wrap.classList.add('hidden'); bar.style.width = '0%'; }, 4000);
+  btn.disabled = false;
+  btn.className = 'w-full py-2 rounded-lg bg-accent/30 text-muted text-xs font-semibold transition-all cursor-not-allowed';
+  loadStats();
+}
+
+// ── Refresh all ────────────────────────────────────────────────────────
+
+async function refreshAll() {
+  const icon = document.getElementById('refresh-icon');
+  icon.style.animation = 'spin 1s linear infinite';
+  icon.style.transformOrigin = 'center';
+
+  await Promise.allSettled([loadHealth(), loadStats(), loadEntities()]);
+  icon.style.animation = '';
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+
+async function init() {
+  await loadCollections();
+  await Promise.allSettled([loadHealth(), loadStats(), loadEntities()]);
+  // Poll health every 30s
+  setInterval(loadHealth, 30_000);
+}
+
+// Add spin keyframe dynamically
+const spinStyle = document.createElement('style');
+spinStyle.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+document.head.appendChild(spinStyle);
+
+init();
+</script>
+</body>
+</html>
