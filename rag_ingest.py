@@ -118,9 +118,10 @@ def ingest_file(path: Path, conn, collection: str) -> dict:
 
     chunks = chunk_blocks(blocks)
 
-    # Enrich with IMDS metadata
-    for ch in chunks:
-        ch["imds_meta"] = _imds_meta(ch["text"], ch.get("inherited_screens", []))
+    # Enrich with IMDS metadata — only for the 'imds' collection
+    if collection == "imds":
+        for ch in chunks:
+            ch["imds_meta"] = _imds_meta(ch["text"], ch.get("inherited_screens", []))
 
     total_tokens = sum(ch.get("token_count", 0) for ch in chunks)
 

@@ -181,14 +181,66 @@ class LLMClient:
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def _build_system(system: Optional[str], json_mode: bool) -> Optional[str]:
-        """Combine caller-supplied system prompt with JSON-mode instruction."""
-        json_instruction = "Respond with valid JSON only. Do not include any prose, markdown fences, or commentary outside the JSON structure."
+    def _build_system(
+        system: Optional[str],
+        json_mode: bool,
+        harden: bool = False,
+    ) -> Optional[str]:
+        """Combine caller-supplied system prompt with JSON-mode and/or guard instructions."""
+        json_instruction = (
+            "Respond with valid JSON only. "
+            "Do not include any prose, markdown fences, or commentary outside the JSON structure."
+        )
+        result = system
+
+        # Prepend injection-resistance clause when hardening is requested
+        if harden:
+            try:
+                from .prompt_guard import harden_system  # noqa: PLC0415
+                result = harden_system(result)
+            except Exception:
+                pass  # guard unavailable — continue without it
+
         if json_mode:
-            if system:
-                return f"{system}\n\n{json_instruction}"
+            if result:
+                return f"{result}\n\n{json_instruction}"
             return json_instruction
-        return system
+        return result
+
+    def complete_hardened(
+        self,
+        system: Optional[str],
+        content: str,
+        content_label: str = "DOCUMENT_CONTENT",
+        max_tokens: int = 2_000,
+        json_mode: bool = False,
+    ) -> str:
+        """
+        Build a prompt where *content* (document text) is wrapped in XML tags
+        and the system prompt is hardened with injection-resistance instructions.
+
+        Use this instead of :meth:`complete` whenever the prompt contains
+        raw document / chunk content (KG extraction, contextual generation, etc.).
+        """
+        try:
+            from .prompt_guard import wrap_content, harden_system  # noqa: PLC0415
+            safe_system = harden_system(system)
+            safe_content = wrap_content(content, content_label)
+        except Exception:
+            # Fall back to unhardened call if guard module is unavailable
+            safe_system = system
+            safe_content = content
+
+        effective_system = self._build_system(safe_system, json_mode)
+        try:
+            return self._ollama_complete(safe_content, effective_system, max_tokens)
+        except Exception as exc:
+            log.warning("Ollama completion failed (%s); trying Claude fallback.", exc)
+        try:
+            return self._claude_complete(safe_content, effective_system, max_tokens)
+        except Exception as exc:
+            log.error("Claude fallback also failed: %s", exc)
+            return ""
 
     def _ollama_complete(
         self,

@@ -514,7 +514,11 @@ async def upload_document(
     parse + embed stages of the ingest pipeline, and return chunk counts.
     """
     allowed_suffixes = {".pdf", ".docx", ".txt", ".md", ".csv", ".json", ".html"}
-    suffix = Path(file.filename).suffix.lower()
+    # Sanitize filename — reject path traversal and null bytes
+    safe_filename = Path(file.filename).name  # strip any directory components
+    if "\x00" in safe_filename or ".." in safe_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    suffix = Path(safe_filename).suffix.lower()
     if suffix not in allowed_suffixes:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}. Allowed: {', '.join(allowed_suffixes)}")
 
@@ -604,11 +608,11 @@ async def health():
     except Exception as exc:
         ollama_status = f"error: {exc}"
 
-    # MemoryWeb check
+    # MemoryWeb check — use /api/memories?limit=1 (fast, no Celery/Redis probe)
     memoryweb_status = "disabled"
     if _MEMORYWEB_ENABLED:
         try:
-            resp = httpx.get(f"{_MEMORYWEB_URL}/api/status", timeout=2.0)
+            resp = httpx.get(f"{_MEMORYWEB_URL}/api/memories?limit=1", timeout=5.0)
             memoryweb_status = "ok" if resp.status_code == 200 else f"error: {resp.status_code}"
         except Exception:
             memoryweb_status = "offline"
@@ -678,6 +682,13 @@ async def search(req: SearchRequest, request: Request,
     Optionally augments context with MemoryWeb memories.
     """
     _check_api_key(request, api_key)
+
+    # ── Prompt injection guard ────────────────────────────────────────────────
+    from src.prompt_guard import check_query  # noqa: PLC0415
+    query_ok, reason = check_query(req.query)
+    if not query_ok:
+        log.warning("/api/search rejected query — %s", reason)
+        raise HTTPException(status_code=400, detail=f"Query rejected: {reason}")
 
     # Pull MemoryWeb context in parallel (non-blocking)
     memory_task = asyncio.create_task(_memoryweb_recall(req.query, top_k=3))

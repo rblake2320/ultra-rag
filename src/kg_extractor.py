@@ -69,9 +69,15 @@ def _build_prompt(content: str, heading_path: Optional[list]) -> str:
         heading_context = "Document section path: " + " > ".join(heading_path) + "\n"
     else:
         heading_context = ""
+    # Sanitize document content before inserting into the prompt
+    try:
+        from .prompt_guard import sanitize_doc_content  # noqa: PLC0415
+        safe_content = sanitize_doc_content(content[:2000])
+    except Exception:
+        safe_content = content[:2000]
     return _EXTRACT_PROMPT_TMPL.format(
         heading_context=heading_context,
-        content=content[:2000],  # tighter cap — smaller prompt = faster + less verbose output
+        content=safe_content,
     )
 
 
@@ -125,7 +131,13 @@ class KGExtractor:
         or {"entities": [], "relationships": []} on any failure.
         """
         prompt = _build_prompt(content, heading_path)
-        result = self.llm.complete_json(prompt, system=_EXTRACT_SYSTEM, max_tokens=1200)
+        # Harden system prompt against indirect injection from document content
+        try:
+            from .prompt_guard import harden_system  # noqa: PLC0415
+            safe_system = harden_system(_EXTRACT_SYSTEM)
+        except Exception:
+            safe_system = _EXTRACT_SYSTEM
+        result = self.llm.complete_json(prompt, system=safe_system, max_tokens=1200)
 
         # Normalise: ensure both keys exist as lists
         entities      = result.get("entities", [])
