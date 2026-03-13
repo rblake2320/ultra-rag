@@ -126,13 +126,13 @@ def test_llm_client_fallback():
 # ---------------------------------------------------------------------------
 
 def test_query_router_heuristic_specific_factoid():
-    """'what is screen 207' → specific_factoid via heuristic."""
+    """'what is the approval threshold' → specific_factoid via heuristic."""
     try:
         from src.query_router import _heuristic_classify
     except ImportError as exc:
         pytest.skip(f"Import error: {exc}")
 
-    result = _heuristic_classify("what is screen 207")
+    result = _heuristic_classify("what is the approval threshold for purchase orders")
     assert result["query_type"] == "specific_factoid", (
         f"Expected specific_factoid, got {result['query_type']}"
     )
@@ -160,7 +160,7 @@ def test_query_router_heuristic_global_thematic():
     except ImportError as exc:
         pytest.skip(f"Import error: {exc}")
 
-    result = _heuristic_classify("overview of maintenance management in IMDS")
+    result = _heuristic_classify("overview of contract management across all divisions")
     assert result["query_type"] == "global_thematic", (
         f"Expected global_thematic, got {result['query_type']}"
     )
@@ -294,9 +294,9 @@ def test_hyde_generates_hypothesis(mock_conn, mock_llm_client):
         pytest.skip(f"Import error: {exc}")
 
     hypothesis_text = (
-        "Screen 207 in IMDS displays equipment maintenance history. "
-        "The primary fields include Equipment ID, Work Order Number, "
-        "and the Performing Work Center."
+        "The vendor onboarding process requires three approval stages. "
+        "The primary fields include Vendor ID, Contract Number, "
+        "and the Approving Authority."
     )
     mock_llm_client.complete = MagicMock(return_value=hypothesis_text)
 
@@ -304,12 +304,12 @@ def test_hyde_generates_hypothesis(mock_conn, mock_llm_client):
     with patch("src.hyde._embed_batch", return_value=[[0.1] * 768]):
         retriever = HyDERetriever(
             conn=mock_conn,
-            collection="imds",
+            collection="my-docs",
             llm_client=mock_llm_client,
         )
         result = retriever.generate_hypothesis(
-            query="What fields are on IMDS screen 207?",
-            domain_hint="IMDS Air Force maintenance system",
+            query="What fields are required for vendor onboarding?",
+            domain_hint="procurement and vendor management",
         )
 
     # LLM complete() was called
@@ -318,7 +318,7 @@ def test_hyde_generates_hypothesis(mock_conn, mock_llm_client):
     # The call included the query text in the prompt
     call_args = mock_llm_client.complete.call_args
     prompt_text = call_args[0][0] if call_args[0] else str(call_args)
-    assert "screen 207" in prompt_text.lower() or "207" in prompt_text, (
+    assert "vendor" in prompt_text.lower() or "onboarding" in prompt_text.lower(), (
         f"Query text not found in prompt: {prompt_text[:300]}"
     )
 
@@ -562,11 +562,11 @@ def test_adversarial_query_mock_search_returns_wrong_results(mock_llm_client):
     mock_llm_client.complete_json = MagicMock(
         return_value={"score": 1, "reason": "completely off-topic"}
     )
-    mock_llm_client.complete = MagicMock(return_value="what is IMDS equipment maintenance record")
+    mock_llm_client.complete = MagicMock(return_value="what are the required fields for a vendor contract record")
 
     evaluator = CRAGEvaluator(
         conn=mock_db,
-        collection="imds",
+        collection="my-docs",
         llm_client=mock_llm_client,
     )
 
@@ -578,11 +578,11 @@ def test_adversarial_query_mock_search_returns_wrong_results(mock_llm_client):
 
     # A mock search_fn that returns a different (but still bad) set
     replacement_results = [
-        {"id": 10, "content": "IMDS screen 207 displays equipment status."},
+        {"id": 10, "content": "Section 4.2 outlines required fields for vendor contracts."},
     ]
     search_fn = MagicMock(return_value=replacement_results)
 
-    query = "What fields are required for an equipment maintenance record?"
+    query = "What fields are required for a vendor contract record?"
     pipeline_result = evaluator.corrective_pipeline(
         query=query,
         initial_results=wrong_results,
@@ -706,21 +706,21 @@ def test_multimodal_extract_entities_from_description(mock_conn, mock_llm_client
     )
 
     description = (
-        "This screenshot shows Screen 207 of the IMDS system. "
-        "The field labeled Work Order Number is required. "
-        "Equipment code OAR-261 must be entered before proceeding."
+        "This screenshot shows the Contract Review Dashboard. "
+        "The field labeled Contract Number is required. "
+        "Vendor code VND-2024 must be entered before proceeding."
     )
 
     entities = processor.extract_entities_from_description(description, chunk_id=99)
 
-    # Should find screen 207
-    screen_entities = [e for e in entities if "207" in e]
-    assert screen_entities, (
-        f"Expected screen 207 entity, found entities: {entities}"
+    # Should find the contract number reference
+    contract_entities = [e for e in entities if "Contract" in e or "contract" in e]
+    assert contract_entities, (
+        f"Expected contract entity, found entities: {entities}"
     )
 
-    # Should find the equipment code
-    equip_entities = [e for e in entities if "OAR-261" in e]
-    assert equip_entities, (
-        f"Expected OAR-261 entity, found entities: {entities}"
+    # Should find the vendor code
+    vendor_entities = [e for e in entities if "VND-2024" in e]
+    assert vendor_entities, (
+        f"Expected VND-2024 entity, found entities: {entities}"
     )

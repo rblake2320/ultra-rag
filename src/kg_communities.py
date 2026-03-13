@@ -80,7 +80,7 @@ class CommunityDetector:
     Usage::
 
         conn = get_conn()
-        cd   = CommunityDetector(conn, "imds")
+        cd   = CommunityDetector(conn, "my-docs")
         stats = cd.process_collection()
         print(stats)
     """

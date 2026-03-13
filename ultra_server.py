@@ -69,24 +69,81 @@ except ImportError as exc:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# API Key Auth
+# API Key Auth — multi-tenant collection isolation
 # ---------------------------------------------------------------------------
-# Set env var ULTRA_RAG_API_KEY to enable auth (leave unset = open for LAN use)
-# Example: set ULTRA_RAG_API_KEY=my-secret-key
-_API_KEY       = os.environ.get("ULTRA_RAG_API_KEY", "")
+# Global admin key (required for /api/systems, /api/ingest, /api/eval):
+#   ULTRA_RAG_API_KEY=<key>
+#
+# Per-collection keys (required to access that collection's data):
+#   ULTRA_RAG_KEY_<CORPUS>=<key>   → only allows access to the named collection
+#   ULTRA_RAG_KEY_PERSONAL=<key>   → only allows access to 'personal' collection
+#   ULTRA_RAG_KEY_<NAME>=<key>     → pattern for future clients
+#
+# If NO keys are configured: open mode (localhost/LAN only — never expose this to internet)
+# If keys ARE configured: all external requests must supply matching X-API-Key header
+
+_API_KEY        = os.environ.get("ULTRA_RAG_API_KEY", "")
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Build collection→key map from env vars matching ULTRA_RAG_KEY_<COLLECTION>
+_COLLECTION_KEYS: Dict[str, str] = {}
+for _env_k, _env_v in os.environ.items():
+    if _env_k.startswith("ULTRA_RAG_KEY_") and _env_v:
+        _col = _env_k[len("ULTRA_RAG_KEY_"):].lower()
+        _COLLECTION_KEYS[_col] = _env_v
+
+
+def _is_localhost(request: Request) -> bool:
+    client_ip = request.client.host if request.client else ""
+    return client_ip in ("127.0.0.1", "::1")
 
 
 def _check_api_key(request: Request, api_key: str = Security(_api_key_header)) -> None:
-    """Pass if no key configured (LAN/local), or if provided key matches."""
+    """Global auth check — used for admin/system endpoints."""
     if not _API_KEY:
-        return   # open mode — local / trusted network
-    # Always allow localhost without a key
-    client_ip = request.client.host if request.client else ""
-    if client_ip in ("127.0.0.1", "::1"):
-        return
+        return   # no global key configured — open mode
+    if _is_localhost(request):
+        return   # localhost always trusted
     if api_key != _API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _check_collection_access(collection: str, request: Request,
+                              api_key: str) -> None:
+    """
+    Collection-level auth check.
+
+    Rules:
+      1. Localhost always allowed (local development / CLI tools)
+      2. Admin key allows access to any collection
+      3. Per-collection key allows access only to that collection
+      4. If no keys configured at all: open (should only be LAN)
+      5. Otherwise: reject
+    """
+    if _is_localhost(request):
+        return
+
+    col = collection.lower()
+    col_key = _COLLECTION_KEYS.get(col, "")
+
+    # No auth configured at all → open (warn: should not be internet-exposed)
+    if not _API_KEY and not col_key and not _COLLECTION_KEYS:
+        log.warning("No API keys configured — server is open. Set ULTRA_RAG_KEY_%s.", col.upper())
+        return
+
+    # Admin key → full access
+    if _API_KEY and api_key == _API_KEY:
+        return
+
+    # Per-collection key → access only to that collection
+    if col_key and api_key == col_key:
+        return
+
+    # Wrong key or no key
+    raise HTTPException(
+        status_code=401,
+        detail=f"Access to collection '{collection}' requires a valid API key",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +242,7 @@ class ResultItem(BaseModel):
 
 class SearchRequest(BaseModel):
     query:              str
-    collection:         str             = "imds"
+    collection:         str             = "my-docs"
     top_k:              int             = Field(5, ge=1, le=50)
     strategy:           Optional[str]   = None   # None = auto-route
     include_provenance: bool            = False
@@ -216,20 +273,20 @@ class IngestResponse(BaseModel):
 
 
 class EntityQuery(BaseModel):
-    collection:   str           = "imds"
+    collection:   str           = "my-docs"
     search_term:  Optional[str] = None
     entity_type:  Optional[str] = None
     limit:        int           = Field(20, ge=1, le=200)
 
 
 class CommunityQuery(BaseModel):
-    collection: str           = "imds"
+    collection: str           = "my-docs"
     level:      Optional[int] = None
     limit:      int           = Field(20, ge=1, le=200)
 
 
 class EvalRequest(BaseModel):
-    collection:   str           = "imds"
+    collection:   str           = "my-docs"
     n_questions:  int           = Field(20, ge=1, le=500)
     run_name:     Optional[str] = None
     run_eval:     bool          = True
@@ -462,7 +519,7 @@ async def collections():
                 cur.execute("SELECT DISTINCT collection FROM rag.documents ORDER BY collection")
                 return [row[0] for row in cur.fetchall()]
             except Exception:
-                return ["imds"]
+                return ["my-docs"]
 
     rows = await asyncio.to_thread(_fetch)
     return {"collections": rows}
@@ -474,7 +531,7 @@ async def collections():
 
 @app.get("/api/entities", tags=["Knowledge Graph"])
 async def entities_get(
-    collection: str = Query("imds"),
+    collection: str = Query("my-docs"),
     search_term: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=200),
@@ -491,7 +548,7 @@ async def entities_get(
 
 @app.get("/api/communities", tags=["Knowledge Graph"])
 async def communities_get(
-    collection: str = Query("imds"),
+    collection: str = Query("my-docs"),
     level: Optional[int] = Query(None),
     limit: int = Query(20, ge=1, le=200),
 ):
@@ -507,7 +564,7 @@ async def communities_get(
 @app.post("/api/upload", tags=["Ingestion"])
 async def upload_document(
     file: UploadFile = File(...),
-    collection: str = Form("imds"),
+    collection: str = Form("my-docs"),
 ):
     """
     Accept a single document upload, save it to a temp directory, run the
@@ -568,6 +625,76 @@ async def upload_document(
 
 
 # ---------------------------------------------------------------------------
+# /api/waitlist
+# ---------------------------------------------------------------------------
+
+class WaitlistEntry(BaseModel):
+    name:     str
+    email:    str
+    org:      str  = ""
+    use_case: str  = ""
+
+_NOTIFY_EMAIL = "Rblake2320@aol.com"
+
+
+def _send_waitlist_notification(entry: WaitlistEntry, ip: str) -> None:
+    """Fire-and-forget SES notification — runs in a thread so it never blocks the response."""
+    try:
+        import boto3  # noqa: PLC0415
+        ses = boto3.client("ses", region_name="us-east-1")
+        use_label = entry.use_case.replace("_", " ").title() if entry.use_case else "Not specified"
+        body = (
+            f"New UltraRAG waitlist signup:\n\n"
+            f"  Name:      {entry.name}\n"
+            f"  Email:     {entry.email}\n"
+            f"  Org:       {entry.org or 'Not provided'}\n"
+            f"  Use case:  {use_label}\n"
+            f"  IP:        {ip}\n"
+            f"  Time:      {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"Reply directly to their email to follow up."
+        )
+        ses.send_email(
+            Source=_NOTIFY_EMAIL,
+            Destination={"ToAddresses": [_NOTIFY_EMAIL]},
+            Message={
+                "Subject": {"Data": f"[UltraRAG] New signup: {entry.name} — {entry.org or entry.email}"},
+                "Body":    {"Text": {"Data": body}},
+            },
+            ReplyToAddresses=[entry.email] if entry.email else [],
+        )
+        log.info("Waitlist notification sent for %s", entry.email)
+    except Exception as exc:
+        log.warning("Waitlist SES notification failed (non-fatal): %s", exc)
+
+
+@app.post("/api/waitlist", tags=["Public"])
+async def waitlist(entry: WaitlistEntry, request: Request):
+    """
+    Public endpoint — no auth required.
+    Saves waitlist sign-ups to a local CSV file and sends an email notification via SES.
+    """
+    import csv  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+    wl_file = Path(__file__).parent / "waitlist.csv"
+    write_header = not wl_file.exists()
+    ip = request.client.host if request.client else "unknown"
+    with open(wl_file, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["timestamp", "name", "email", "org", "use_case", "ip"])
+        if write_header:
+            writer.writeheader()
+        writer.writerow({
+            "timestamp": datetime.utcnow().isoformat(),
+            "name":      entry.name[:120],
+            "email":     entry.email[:120],
+            "org":       entry.org[:120],
+            "use_case":  entry.use_case[:80],
+            "ip":        ip,
+        })
+    log.info("Waitlist signup: %s <%s> — %s (%s)", entry.name, entry.email, entry.org, entry.use_case)
+    threading.Thread(target=_send_waitlist_notification, args=(entry, ip), daemon=True).start()
+    return {"ok": True, "message": "You're on the waitlist. We'll try to get back to you within 24 hours."}
+
+
 # /api/health
 # ---------------------------------------------------------------------------
 
@@ -637,8 +764,11 @@ async def health():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/stats", response_model=StatsResponse, tags=["System"])
-async def stats(collection: str = Query("imds", description="Collection name")):
+async def stats(request: Request, collection: str = Query("my-docs", description="Collection name"),
+                api_key: str = Security(_api_key_header)):
     """Return chunk, entity, community, and parent-chunk counts."""
+    _check_collection_access(collection, request, api_key)
+
     def _fetch(coll: str) -> StatsResponse:
         conn = _get_conn()
         counts: dict[str, int] = {}
@@ -681,7 +811,7 @@ async def search(req: SearchRequest, request: Request,
     CRAG → Self-RAG → utility boost → parent expansion → provenance.
     Optionally augments context with MemoryWeb memories.
     """
-    _check_api_key(request, api_key)
+    _check_collection_access(req.collection, request, api_key)
 
     # ── Prompt injection guard ────────────────────────────────────────────────
     from src.prompt_guard import check_query  # noqa: PLC0415
@@ -814,11 +944,13 @@ async def ingest(req: IngestRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/entities", tags=["Knowledge Graph"])
-async def entities(req: EntityQuery):
+async def entities(req: EntityQuery, request: Request,
+                   api_key: str = Security(_api_key_header)):
     """
     Browse knowledge graph entities.  Filter by collection, search term,
     or entity type.  Returns list of entity dicts.
     """
+    _check_collection_access(req.collection, request, api_key)
     def _fetch() -> list:
         import psycopg2.extras  # noqa: PLC0415
         conn = _get_conn()
@@ -863,10 +995,12 @@ async def entities(req: EntityQuery):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/communities", tags=["Knowledge Graph"])
-async def communities(req: CommunityQuery):
+async def communities(req: CommunityQuery, request: Request,
+                      api_key: str = Security(_api_key_header)):
     """
     Browse detected communities.  Optionally filter by resolution level.
     """
+    _check_collection_access(req.collection, request, api_key)
     def _fetch() -> list:
         import psycopg2.extras  # noqa: PLC0415
         conn = _get_conn()

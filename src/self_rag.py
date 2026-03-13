@@ -38,8 +38,8 @@ REFLECTION_TOKENS = {
 # Patterns that suggest a query needs external facts
 _FACTOID_PATTERNS = re.compile(
     r"\b(\d{4}|\d{1,2}/\d{1,2}|\bwhen\b|\bwhere\b|\bwho\b|\bhow many\b"
-    r"|\bwhat is\b|\bwhat are\b|[A-Z]{2,6}-\d+|AFI\b|TM\b|AR\b|FM\b"
-    r"|IMDS\b|CAMS\b|screen\b|error code\b|fault code\b)",
+    r"|\bwhat is\b|\bwhat are\b|[A-Z]{2,6}-\d+|ISO\b|RFC\b|CFR\b|USC\b"
+    r"|section\b|procedure\b|error code\b|requirement\b)",
     re.IGNORECASE,
 )
 

@@ -146,9 +146,9 @@ def insert_chunks(conn, doc_id: int, collection: str, chunks: list,
                 f"{collection}:{file_path}:{idx}:{content_hash}".encode()
             ).hexdigest()[:64]
 
-            imds_meta    = ch.get("imds_meta", {})
+            extra_meta   = ch.get("extra_meta", {}) or {}
             chunk_meta   = {
-                k: v for k, v in imds_meta.items()
+                k: v for k, v in extra_meta.items()
             }
             chunk_meta["source_section"] = ch.get("source_section", "")
 

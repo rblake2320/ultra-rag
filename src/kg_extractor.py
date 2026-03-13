@@ -51,7 +51,7 @@ Return a JSON object with exactly two keys:
 Guidelines:
 - Extract at most 8 entities — only the most significant named domain concepts.
 - Focus on: screen names, field names, error codes, procedures, roles, system identifiers.
-- Entity names must be short canonical labels (e.g. "Work Order", "Screen 207", "UPC", "CAMS").
+- Entity names must be short canonical labels (e.g. "Contract Number", "Approval Stage", "Vendor ID", "Policy Section").
 - Descriptions must be ≤ 12 words.
 - Relationship types: concise verb phrases (e.g. "REQUIRES", "REFERENCES", "BELONGS_TO").
 - Only include relationships where both source and target are in your entities list.
@@ -92,7 +92,7 @@ class KGExtractor:
     Parameters
     ----------
     conn        : psycopg2 connection (must already have Ultra RAG schema).
-    collection  : Collection name (e.g. "imds").
+    collection  : Collection name (e.g. "my-docs").
     llm_client  : Optional pre-constructed LLMClient; one is created if None.
     """
 

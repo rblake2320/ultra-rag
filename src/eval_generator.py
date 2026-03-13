@@ -43,7 +43,7 @@ class EvalDatasetGenerator:
     Usage::
 
         conn = get_conn()
-        gen  = EvalDatasetGenerator(conn, "imds")
+        gen  = EvalDatasetGenerator(conn, "my-docs")
         questions = gen.generate_dataset(n_questions=50)
         gen.export_jsonl(questions, "/tmp/eval_imds.jsonl")
     """

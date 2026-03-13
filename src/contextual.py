@@ -46,7 +46,7 @@ class ContextualRetriever:
     Usage::
 
         conn = get_conn()
-        cr   = ContextualRetriever(conn, "imds")
+        cr   = ContextualRetriever(conn, "my-docs")
         n    = cr.process_collection()
         print(f"Processed {n} chunks")
     """

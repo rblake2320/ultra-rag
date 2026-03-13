@@ -136,7 +136,7 @@ def parse_docx(path: Path) -> list:
         return sorted(s)
 
     def get_context_prefix():
-        parts = [f"IMDS {path.stem}"]
+        parts = [path.stem]
         for _, txt, _ in heading_stack:
             parts.append(txt)
         return " > ".join(parts)

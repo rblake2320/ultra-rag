@@ -59,9 +59,9 @@ class RAGASEvalRunner:
     Usage::
 
         conn = get_conn()
-        runner = RAGASEvalRunner(conn, "imds")
+        runner = RAGASEvalRunner(conn, "my-docs")
         from src.search import search
-        search_fn = lambda q, top_k: search(conn, q, "imds", top_k)
+        search_fn = lambda q, top_k: search(conn, q, "my-docs", top_k)
         results = runner.evaluate_dataset(questions, search_fn, run_name="baseline")
     """
 

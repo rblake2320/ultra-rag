@@ -51,22 +51,22 @@ STRATEGY_MAP: dict[str, str] = {
 
 _FEW_SHOT_EXAMPLES = """
 EXAMPLES:
-Q: "What error code does IMDS display when equipment ID is invalid?"
-A: {"query_type": "specific_factoid", "confidence": 0.95, "reasoning": "Asks for a single error code value."}
+Q: "What is the maximum contract value allowed without a review board?"
+A: {"query_type": "specific_factoid", "confidence": 0.95, "reasoning": "Asks for a single threshold value."}
 
-Q: "Tell me everything about the Work Order screen in IMDS"
-A: {"query_type": "entity_focused", "confidence": 0.90, "reasoning": "Centres on a specific named screen/entity."}
+Q: "Tell me everything about the vendor onboarding process"
+A: {"query_type": "entity_focused", "confidence": 0.90, "reasoning": "Centres on a specific named process/entity."}
 
-Q: "What are the main workflow stages in IMDS maintenance management?"
-A: {"query_type": "global_thematic", "confidence": 0.88, "reasoning": "Broad overview across the whole system."}
+Q: "What are the main compliance themes across all policy documents?"
+A: {"query_type": "global_thematic", "confidence": 0.88, "reasoning": "Broad overview across the whole corpus."}
 
-Q: "How does the Job Control Number relate to the Work Unit Code in a maintenance transaction?"
+Q: "How does the procurement policy relate to the budget approval workflow?"
 A: {"query_type": "multi_hop", "confidence": 0.92, "reasoning": "Requires connecting two distinct entities."}
 
-Q: "Tell me about discrepancy documentation"
+Q: "Tell me about the reporting requirements"
 A: {"query_type": "vague_exploratory", "confidence": 0.80, "reasoning": "Vague; vocabulary gap between query and docs."}
 
-Q: "What fields are on screen 207 and also how do I close a job card?"
+Q: "What are the approval steps and also what happens when a vendor is rejected?"
 A: {"query_type": "compound", "confidence": 0.93, "reasoning": "Two unrelated sub-questions in one query."}
 """.strip()
 
@@ -158,9 +158,9 @@ def _heuristic_classify(query: str) -> dict:
         r"^how to\b",                   # "how to change..."
         r"^where is\b",                 # "where is the field..."
         r"^show me\b",                  # "show me screen..."
-        r"\bscreen\s+\d+",             # "screen 207", "screen 042"
-        r"\b[A-Z]{2,5}-\d{3,}\b",      # field/error codes e.g. OAR-261
-        r"\b(screen|field|error code|tric|upc|wuc|job card|work order)\b",
+        r"\bsection\s+\d+",             # "section 4", "section 12"
+        r"\b[A-Z]{2,5}-\d{3,}\b",      # identifier codes e.g. VND-2024
+        r"\b(section|field|error code|procedure|step|form|requirement)\b",
     ]
     for pattern in _FACTOID_PATTERNS:
         if re.search(pattern, q):

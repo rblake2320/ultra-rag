@@ -60,7 +60,7 @@ class AdversarialTester:
 
     Usage::
 
-        tester = AdversarialTester(conn, "imds", search_fn=my_search_fn)
+        tester = AdversarialTester(conn, "my-docs", search_fn=my_search_fn)
         report = tester.run_full_cycle(n_queries=30)
         print(report)
     """

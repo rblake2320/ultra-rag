@@ -47,10 +47,10 @@ def search(conn, query: str, collection: str,
     Args:
         conn:            psycopg2 connection
         query:           natural language query
-        collection:      collection name (e.g. 'imds')
+        collection:      collection name (e.g. 'my-docs')
         top_k:           final results to return
         content_type:    filter by content_type (optional)
-        metadata_filter: JSONB containment filter e.g. {'imds_screens': ['207']}
+        metadata_filter: JSONB containment filter e.g. {'section': ['chapter-3']}
         force_tier:      1=keyword only, 2=vector only, 3=both+rerank
 
     Returns:

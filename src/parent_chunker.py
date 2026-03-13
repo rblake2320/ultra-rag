@@ -56,7 +56,7 @@ class ParentChunker:
     Usage::
 
         conn = get_conn()
-        pc   = ParentChunker(conn, "imds")
+        pc   = ParentChunker(conn, "my-docs")
         stats = pc.process_collection()
         print(stats)
     """

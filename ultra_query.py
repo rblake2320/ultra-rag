@@ -7,13 +7,13 @@ then applies reranking, CRAG quality evaluation, Self-RAG adaptive filtering,
 and utility-score boosting before returning results.
 
 Usage:
-  python ultra_query.py "equipment screen 207" --collection imds
-  python ultra_query.py "how does SBSS relate to CAMS" --collection imds --strategy kg_local
-  python ultra_query.py "what are main maintenance themes" --collection imds --strategy kg_global
-  python ultra_query.py "explain the WUC system" --collection imds --hyde
-  python ultra_query.py "screen 207 AND job status" --collection imds --strategy compound
-  python ultra_query.py "screen 207" --collection imds --json
-  python ultra_query.py "screen 207" --collection imds --provenance
+  python ultra_query.py "what are the key findings in chapter 3?" --collection my-docs
+  python ultra_query.py "how does policy A relate to policy B?" --collection my-docs --strategy kg_local
+  python ultra_query.py "what are the main themes across all documents?" --collection my-docs --strategy kg_global
+  python ultra_query.py "explain the approval workflow" --collection my-docs --hyde
+  python ultra_query.py "compliance AND reporting requirements" --collection my-docs --strategy compound
+  python ultra_query.py "quarterly results" --collection my-docs --json
+  python ultra_query.py "risk factors" --collection my-docs --provenance
 """
 import argparse
 import json
@@ -500,7 +500,7 @@ def _print_results(query_result: dict, show_provenance: bool = False) -> None:
         tok     = r.get("token_count") or "?"
         ctx     = r.get("context_prefix", "") or ""
         meta    = r.get("chunk_metadata", {}) or {}
-        screens = meta.get("imds_screens", [])
+        sections = meta.get("sections", []) or meta.get("tags", [])
         rerank  = r.get("rerank_score")
         utility = r.get("utility_score")
 
@@ -513,8 +513,8 @@ def _print_results(query_result: dict, show_provenance: bool = False) -> None:
         print(f"\n[{i}] {ctype.upper():<22} {score_line}  {tok}tok")
         if ctx:
             print(f"    Context: {_truncate(ctx, 80)}")
-        if screens:
-            print(f"    Screens: {', '.join(screens)}")
+        if sections:
+            print(f"    Sections: {', '.join(sections)}")
 
         content = r.get("content", "")
         for line in _truncate(content, 600).split("\n"):
@@ -543,7 +543,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("query",      help="Search query")
-    parser.add_argument("--collection", default="imds", help="Collection name (default: imds)")
+    parser.add_argument("--collection", default="my-docs", help="Collection name")
     parser.add_argument("--top", "-k", type=int, default=5, help="Top results (default: 5)")
     parser.add_argument(
         "--strategy",

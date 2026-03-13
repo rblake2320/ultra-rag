@@ -16,11 +16,11 @@ Usage
     decomposer = QueryDecomposer()
 
     sub_queries = decomposer.decompose(
-        "What fields are on screen 207 and also how do I close a job card?"
+        "What are the approval requirements and also how do I submit a vendor exception?"
     )
-    # → [{'query': 'What fields are on screen 207?', 'type': 'entity_focused',
+    # → [{'query': 'What are the approval requirements?', 'type': 'entity_focused',
     #      'depends_on': None},
-    #    {'query': 'How do I close a job card?', 'type': 'specific_factoid',
+    #    {'query': 'How do I submit a vendor exception?', 'type': 'specific_factoid',
     #      'depends_on': None}]
 """
 from __future__ import annotations

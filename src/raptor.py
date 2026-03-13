@@ -54,7 +54,7 @@ class RAPTOR:
     Usage::
 
         conn  = get_conn()
-        rap   = RAPTOR(conn, "imds")
+        rap   = RAPTOR(conn, "my-docs")
         stats = rap.build_tree()
         print(stats)  # {"levels": 3, "summaries": 142}
 

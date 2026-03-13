@@ -94,10 +94,10 @@ def test_content_type_preserved():
 
 def test_context_prefix_inherited():
     blocks = [_block("content " * 20, ctype="text")]
-    blocks[0]["context_prefix"] = "IMDS u560 > Section 2 > Screen 207"
+    blocks[0]["context_prefix"] = "Annual Report > Chapter 2 > Section 4"
     result = chunk_blocks(blocks)
     for c in result:
-        assert c["context_prefix"] == "IMDS u560 > Section 2 > Screen 207"
+        assert c["context_prefix"] == "Annual Report > Chapter 2 > Section 4"
 
 
 def test_table_split():

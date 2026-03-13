@@ -12,7 +12,7 @@ Incorporates:
 
 Typical usage:
     from src.kg_graph import KGGraph
-    g = KGGraph(conn, "imds")
+    g = KGGraph(conn, "my-docs")
 
     seeds = g.get_seed_entities("Work Order status codes", query_embedding=emb)
     top   = g.ppr([s["id"] for s in seeds], top_k=20, query_embedding=emb,
@@ -36,7 +36,7 @@ class KGGraph:
     Parameters
     ----------
     conn       : psycopg2 connection with Ultra RAG schema present.
-    collection : Collection name, e.g. "imds".
+    collection : Collection name, e.g. "my-docs".
     """
 
     def __init__(self, conn, collection: str) -> None:

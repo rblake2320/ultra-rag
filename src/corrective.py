@@ -52,7 +52,7 @@ class CRAGEvaluator:
     Usage::
 
         conn = get_conn()
-        evaluator = CRAGEvaluator(conn, "imds")
+        evaluator = CRAGEvaluator(conn, "my-docs")
         result = evaluator.corrective_pipeline(query, initial_results, search_fn)
     """
 

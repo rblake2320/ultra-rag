@@ -12,10 +12,10 @@ Stages:
   7. raptor       — RAPTOR hierarchical summary tree
 
 Usage:
-  python ultra_ingest.py imds --stages all
-  python ultra_ingest.py imds --stages kg,raptor
-  python ultra_ingest.py imds --stages contextual --no-llm
-  python ultra_ingest.py imds --stages parse,embed --batch-size 64
+  python ultra_ingest.py my-docs --stages all
+  python ultra_ingest.py my-docs --stages kg,raptor
+  python ultra_ingest.py my-docs --stages contextual --no-llm
+  python ultra_ingest.py my-docs --stages parse,embed --batch-size 64
 """
 import argparse
 import logging

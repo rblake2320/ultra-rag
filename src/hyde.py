@@ -11,7 +11,7 @@ and the precise technical language used in the document corpus.
 Typical use
 -----------
     from src.hyde import HyDERetriever
-    retriever = HyDERetriever(conn, collection="imds")
+    retriever = HyDERetriever(conn, collection="my-docs")
     results = retriever.search("tell me about discrepancy documentation", top_k=5)
 """
 from __future__ import annotations
