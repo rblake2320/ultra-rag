@@ -1159,5 +1159,23 @@ def main():
     )
 
 
+
+from fastapi import Path
+
+@app.post("/api/collections/{name}/clear")
+async def clear_collection(name: str = Path(..., title="Collection name")):
+    """Clears all documents from a collection without deleting the collection."""
+    cleared_count = await _clear_collection(name)
+    return {"ok": True, "collection": name, "cleared_count": cleared_count}
+
+async def _clear_collection(name: str) -> int:
+    """Removes all documents from a collection."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            """DELETE FROM rag.documents WHERE collection = :name""",
+            {"name": name},
+        )
+        return result.rowcount
+
 if __name__ == "__main__":
     main()
