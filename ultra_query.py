@@ -596,5 +596,33 @@ def main():
         conn.close()
 
 
+
+# Import statements needed (only new ones not in existing code)
+from flask import Flask, jsonify, request
+from src.vector_store import get_documents_vector_store
+
+app = Flask(__name__)
+
+# New endpoint /api/collections/{name}/documents
+@app.route('/api/collections/<string:name>/documents', methods=['GET'])
+def get_documents(name):
+    limit = request.args.get('limit', default=20, type=int)
+    offset = request.args.get('offset', default=0, type=int)
+    
+    # Fetch documents from the vector store (assuming a function get_documents_from_vector_store exists)
+    documents = get_documents_from_vector_store(name, limit, offset)
+    
+    # Prepare the response with a list of document details
+    documents_data = [
+        {'id': doc['id'],
+         'text': doc['text'][:200],  # Extract first 200 chars
+         'metadata': doc['metadata']}
+        for doc in documents
+    ]
+    
+    return jsonify(documents_data)
+
+# Rest of the existing ultra_server.py code...
+
 if __name__ == "__main__":
     main()
