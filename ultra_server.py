@@ -1159,5 +1159,16 @@ def main():
     )
 
 
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+# Add X-API-Version: 1.0 to all responses via middleware
+@app.middleware("http")
+async def add_api_version_header(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-API-Version"] = "1.0"
+    return response
+
 if __name__ == "__main__":
     main()
