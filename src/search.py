@@ -181,3 +181,38 @@ def _nim_rerank(query: str, candidates: list, top_k: int, cfg: dict) -> list:
     # rankings: [{index, logit}, ...] sorted by relevance
     top_indices = [r["index"] for r in rankings[:top_k]]
     return [candidates[i] for i in top_indices if i < len(candidates)]
+
+# Import statements needed
+import json
+from datetime import datetime
+from src.search import search
+
+# Module-level list to store search history
+search_history = []
+
+# New function to handle search history
+def _record_search(query: str, collection: str, result_count: int) -> None:
+    timestamp = datetime.now().isoformat()
+    search_history.append({
+        "timestamp": timestamp,
+        "query": query,
+        "collection": collection,
+        "result_count": result_count
+    })
+
+# Modified search function to record history
+def search(conn, query: str, collection: str,
+           top_k: int = 5,
+           content_type: Optional[str] = None,
+           metadata_filter: Optional[dict] = None,
+           force_tier: Optional[int] = None) -> list:
+    results = original_search_logic(conn, query, collection, top_k, content_type, metadata_filter, force_tier)
+    _record_search(query, collection, len(results))
+    return results
+
+# New endpoint to get search history
+@app.route('/api/search/history', methods=['GET'])
+def get_search_history():
+    return json.dumps(search_history[-20:], default=str)
+
+# Ensure the new code is integrated with the existing search logic without altering its core functionality
