@@ -1159,5 +1159,49 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+from typing import List, Dict
+
+# New module-level list to store feedback
+FEEDBACK: List[Dict] = []
+
+# New endpoint to handle feedback submission
+@app.post("/api/feedback")
+async def submit_feedback(
+    request: Request,
+    query: str = Form(...),
+    result_id: str = Form(...),
+    rating: int = Form(...),
+    comment: str = Form(...),
+    api_key: str = Security(_api_key_header),
+) -> JSONResponse:
+    """Submit user feedback on a search result."""
+    if not _is_localhost(request) and not _check_api_key(request, api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not 1 <= rating <= 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    feedback = {
+        "query": query,
+        "result_id": result_id,
+        "rating": rating,
+        "comment": comment,
+        "timestamp": datetime.now().isoformat(),
+    }
+    FEEDBACK.append(feedback)
+    return JSONResponse(content={"message": "Feedback submitted successfully"}, status_code=201)
+
+# New endpoint to retrieve last 50 feedback entries
+@app.get("/api/feedback")
+async def get_feedback(
+    request: Request,
+    api_key: str = Security(_api_key_header),
+) -> JSONResponse:
+    """Retrieve the last 50 feedback entries."""
+    if not _is_localhost(request) and not _check_api_key(request, api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    recent_feedback = FEEDBACK[-50:]
+    return JSONResponse(content={"feedback": recent_feedback}, status_code=200)
+
 if __name__ == "__main__":
     main()
