@@ -1159,5 +1159,21 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+import sys
+import fastapi
+
+# New endpoint
+@app.get("/api/version")
+async def get_version():
+    """Return version information for Ultra RAG."""
+    return {
+        "version": "1.0.0",
+        "api_version": "v1",
+        "python_version": sys.version,
+        "fastapi_version": fastapi.__version__,
+    }
+
 if __name__ == "__main__":
     main()
