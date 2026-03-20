@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ultra RAG Ingest: full 7-stage pipeline.
+Ultra RAG Ingest: full 8-stage pipeline.
 
 Stages:
   1. parse        — Parse + chunk source documents (uses existing rag_ingest logic)
@@ -10,12 +10,14 @@ Stages:
   5. kg           — Extract entities and relationships into knowledge graph
   6. communities  — Leiden community detection + LLM summaries
   7. raptor       — RAPTOR hierarchical summary tree
+  8. colbert      — Build ColBERT PLAID index for late-interaction retrieval
 
 Usage:
   python ultra_ingest.py my-docs --stages all
   python ultra_ingest.py my-docs --stages kg,raptor
   python ultra_ingest.py my-docs --stages contextual --no-llm
   python ultra_ingest.py my-docs --stages parse,embed --batch-size 64
+  python ultra_ingest.py my-docs --stages colbert
 """
 import argparse
 import logging
@@ -51,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Stage registry
 # ---------------------------------------------------------------------------
 
-ALL_STAGES = ["parse", "embed", "contextual", "parents", "kg", "communities", "raptor"]
+ALL_STAGES = ["parse", "embed", "contextual", "parents", "kg", "communities", "raptor", "colbert"]
 LLM_STAGES = {"contextual", "kg", "communities", "raptor"}
 
 
@@ -138,13 +140,29 @@ def _run_raptor(collection: str, conn) -> dict:
         return {"skipped": True, "reason": "src.raptor module not available"}
 
 
+def _run_colbert(collection: str, conn) -> dict:
+    """Stage 8: build ColBERT PLAID index for late-interaction retrieval."""
+    try:
+        from src.colbert_retriever import ColBERTRetriever  # noqa: PLC0415
+        retriever = ColBERTRetriever()
+        stats = retriever.build_index(conn, collection)
+        return stats
+    except ImportError:
+        log.warning("RAGatouille not installed — skipping ColBERT stage")
+        log.warning("  Install with: pip install ragatouille>=0.0.8")
+        return {"skipped": True, "reason": "ragatouille not installed"}
+    except Exception as exc:
+        log.warning("ColBERT stage failed: %s", exc)
+        return {"skipped": True, "reason": str(exc)}
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ultra RAG Ingest — 7-stage ingestion pipeline",
+        description="Ultra RAG Ingest — 8-stage ingestion pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"Stages: {', '.join(ALL_STAGES)}",
     )
@@ -186,6 +204,27 @@ def main():
     if not stages:
         log.info("No stages to run.")
         return
+
+    # Warn if prerequisite stages are missing from this run
+    _PREREQS = {
+        "embed":       {"parse"},
+        "contextual":  {"parse", "embed"},
+        "parents":     {"parse"},
+        "kg":          {"parse"},
+        "communities": {"parse", "kg"},
+        "raptor":      {"parse", "embed"},
+        "colbert":     {"parse"},
+    }
+    stages_set = set(stages)
+    for stage, required in _PREREQS.items():
+        if stage in stages_set:
+            missing = required - stages_set
+            if missing:
+                log.warning(
+                    "Stage '%s' depends on %s which are NOT in this run. "
+                    "Ensure they completed in a prior run or add them with --stages.",
+                    stage, sorted(missing),
+                )
 
     log.info("=" * 65)
     log.info("Ultra RAG Ingest — collection: %s", args.collection)
@@ -230,6 +269,9 @@ def main():
 
                 elif stage == "raptor":
                     stats = _run_raptor(args.collection, conn)
+
+                elif stage == "colbert":
+                    stats = _run_colbert(args.collection, conn)
 
             except Exception as exc:
                 log.error("Stage '%s' failed: %s", stage, exc, exc_info=True)

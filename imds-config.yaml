@@ -1,0 +1,77 @@
+# IMDS Standalone RAG Config
+# DoD contract knowledge base — separate from personal RAG
+# Usage:
+#   Query:  python ultra_query.py "your question" --collection imds --config imds-config.yaml
+#   Ingest: python ultra_ingest.py imds --stages all --config imds-config.yaml
+#   Server: uvicorn ultra_server:app --port 8301  (set RAG_CONFIG=imds-config.yaml)
+
+collections:
+  imds:
+    paths:
+    - C:\Users\techai\OneDrive\Desktop\All IMDS
+    exclude_dirs:
+    - gherkin-test-cases
+    - to convert
+    - rag-output
+    - __pycache__
+    skip_files:
+    - CLAUDE_WINDOW_PROMPT.txt
+    - rag_forge_run.py
+
+db:
+  host: localhost
+  port: 5432
+  database: postgres
+  user: postgres
+  password: ${RAG_DB_PASSWORD}
+
+embedding:
+  model: nomic-embed-text
+  provider: ollama
+  dimensions: 768
+  ollama_url: http://localhost:11434
+  batch_size: 4
+
+search:
+  reranker_model: nvidia/rerank-qa-mistral-4b
+  reranker_endpoint: https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking
+  nvidia_api_key: ${NVIDIA_API_KEY}
+  rrf_k_vector: 60
+  rrf_k_keyword: 40
+
+chunking:
+  max_tokens: 1000
+  min_tokens: 50
+  overlap_tokens: 150
+  merge_threshold: 100
+  type_limits:
+    field_definition: 400
+    table: 1200
+    procedure: 1000
+    screen_print: 800
+    text: 1000
+    body: 1000
+    box: 900
+    list: 800
+
+llm:
+  provider: ollama
+  model: qwen2.5-coder:32b
+  fast_model: qwen2.5:7b
+  ollama_url: http://localhost:11434
+  max_tokens: 2000
+
+kg:
+  extraction_batch_size: 50
+  synonymy_threshold: 0.8
+  ppr_alpha: 0.85
+  ppr_max_iter: 30
+
+raptor:
+  max_levels: 3
+  cluster_size: 10
+  min_cluster_items: 3
+
+contextual:
+  batch_size: 20
+  max_doc_preview_chars: 3000

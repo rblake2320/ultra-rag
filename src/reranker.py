@@ -35,8 +35,10 @@ from .config import get_config
 
 log = logging.getLogger(__name__)
 
-# Default cross-encoder — tiny, fast, good quality for English
-_DEFAULT_CE_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# Default cross-encoder — BGE-Reranker-v2-m3: state-of-the-art multilingual reranker
+# Outperforms ms-marco-MiniLM significantly on BEIR and MTEB-Reranking benchmarks.
+# Supports up to 8192 tokens; we use max_length=1024 for practical batch speed.
+_DEFAULT_CE_MODEL = "BAAI/bge-reranker-v2-m3"
 
 # Utility boost multiplier: final_score = rerank_score * (1 + 0.3 * utility_ema)
 _UTILITY_BOOST_FACTOR = 0.3
@@ -97,8 +99,8 @@ class Reranker:
     ----------
     model_name : str
         HuggingFace model ID for the local cross-encoder.
-        Default: ``cross-encoder/ms-marco-MiniLM-L-6-v2``
-        (6-layer MiniLM — fast enough for real-time use on any GPU).
+        Default: ``BAAI/bge-reranker-v2-m3``
+        (state-of-the-art multilingual reranker, top MTEB-Reranking as of 2024-12).
     use_gpu : bool
         When True (default) and CUDA is available, the model is loaded on
         the GPU (RTX 5090 on this system).
@@ -129,7 +131,7 @@ class Reranker:
             self._local_model = CrossEncoder(
                 model_name,
                 device=self._device,
-                max_length=512,
+                max_length=1024,  # BGE-v2-m3 supports up to 8192; 1024 balances speed+quality
             )
             log.info("Reranker: local cross-encoder ready.")
 
@@ -253,7 +255,7 @@ class Reranker:
         self, query: str, candidates: list, top_k: int
     ) -> list:
         """Run local CrossEncoder.predict on (query, passage) pairs."""
-        pairs = [(query, c.get("content", "")[:1024]) for c in candidates]
+        pairs = [(query, c.get("content", "")[:2048]) for c in candidates]
         scores = self._local_model.predict(pairs)
 
         # scores is a numpy array or list; convert to plain float

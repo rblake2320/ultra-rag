@@ -153,26 +153,41 @@ def ingest_collection(collection: str, conn) -> dict:
     if not coll_cfg:
         raise ValueError(f"Collection '{collection}' not found in config.yaml")
 
-    paths      = [Path(p) for p in coll_cfg.get("paths", [])]
+    # paths may be plain strings OR dicts: {path: ..., max_depth: N}
+    raw_paths  = coll_cfg.get("paths", [])
     excl_dirs  = set(coll_cfg.get("exclude_dirs", []))
     skip_files = set(coll_cfg.get("skip_files", []))
 
-    # Collect files
+    def _parse_path_entry(entry):
+        if isinstance(entry, dict):
+            return Path(entry["path"]), entry.get("max_depth", None)
+        return Path(str(entry)), None
+
+    path_entries = [_parse_path_entry(e) for e in raw_paths]
+
+    # Collect files using os.walk so excluded dirs are pruned before traversal
+    import os
     files = []
-    for base in paths:
+    for base, max_depth in path_entries:
         if not base.exists():
             log.warning(f"Path not found: {base}")
             continue
-        for fpath in sorted(base.rglob("*")):
-            if not fpath.is_file():
-                continue
-            rel = fpath.relative_to(base)
-            if any(d in excl_dirs for d in rel.parts):
-                continue
-            if fpath.name in skip_files:
-                continue
-            if fpath.suffix.lower() in PARSERS:
-                files.append(fpath)
+        base_str = str(base)
+        base_depth = base_str.rstrip("/\\").count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(base_str):
+            # Prune excluded dirs IN PLACE (prevents os.walk from descending)
+            dirnames[:] = [d for d in dirnames if d not in excl_dirs]
+            # Enforce max_depth: stop descending beyond base + max_depth levels
+            if max_depth is not None:
+                current_depth = dirpath.rstrip("/\\").count(os.sep) - base_depth
+                if current_depth >= max_depth:
+                    dirnames[:] = []
+            for fname in filenames:
+                if fname in skip_files:
+                    continue
+                fpath = Path(dirpath) / fname
+                if fpath.suffix.lower() in PARSERS:
+                    files.append(fpath)
 
     log.info(f"Collection '{collection}': {len(files)} files found")
 

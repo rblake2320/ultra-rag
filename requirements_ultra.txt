@@ -10,6 +10,13 @@ leidenalg>=0.10.0
 
 # ── Embeddings & Cross-encoder Reranking ────────────────────────────────────
 sentence-transformers>=3.0.0
+# FlagEmbedding: native loader for BAAI/bge-reranker-v2-m3 (optional —
+# sentence-transformers CrossEncoder also loads BGE models; this adds FlagReranker API)
+FlagEmbedding>=1.2.0
+
+# ── ColBERT late-interaction retrieval ──────────────────────────────────────
+# RAGatouille wraps ColBERTv2 with PLAID indexing for efficient token-level matching
+ragatouille>=0.0.8
 
 # ── Clustering (RAPTOR) ─────────────────────────────────────────────────────
 # scikit-learn already installed

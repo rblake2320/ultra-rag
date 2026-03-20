@@ -82,11 +82,10 @@ class RAGASEvalRunner:
         return self._llm
 
     def _embed(self, texts: list) -> list:
-        """Embed a list of texts, returning list of float-list embeddings."""
-        from .config import get_config      # noqa: PLC0415
-        from .embedder import _embed_batch  # noqa: PLC0415
-        cfg = get_config()["embedding"]
-        return _embed_batch(texts, cfg["ollama_url"], cfg["model"])
+        """Embed a list of texts using the configured provider (local or Ollama)."""
+        from .embedder import get_embedder  # noqa: PLC0415
+        embedder = get_embedder()
+        return embedder(texts)
 
     # ------------------------------------------------------------------
     # Query runner

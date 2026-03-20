@@ -94,8 +94,27 @@ for _env_k, _env_v in os.environ.items():
 
 
 def _is_localhost(request: Request) -> bool:
+    """Return True ONLY for direct local connections — no proxy, no tunnel.
+
+    Cloudflare tunnel (cloudflared) connects from 127.0.0.1 but adds
+    CF-Connecting-IP / X-Forwarded-For headers with the real remote IP.
+    Any request that passed through a proxy/tunnel is treated as external.
+    """
     client_ip = request.client.host if request.client else ""
-    return client_ip in ("127.0.0.1", "::1")
+    if client_ip not in ("127.0.0.1", "::1"):
+        return False
+    # If any forwarding header is present, the request came through a proxy/tunnel
+    forwarding_headers = (
+        "cf-connecting-ip",      # Cloudflare real IP
+        "x-forwarded-for",       # Generic proxy
+        "x-real-ip",             # Nginx proxy
+        "x-forwarded-host",      # Proxy host header
+    )
+    headers_lower = {k.lower(): v for k, v in request.headers.items()}
+    for h in forwarding_headers:
+        if h in headers_lower:
+            return False
+    return True
 
 
 def _check_api_key(request: Request, api_key: str = Security(_api_key_header)) -> None:
@@ -171,22 +190,60 @@ async def _memoryweb_recall(query: str, top_k: int = 3) -> List[Dict]:
     return []
 
 
-async def _memoryweb_store(query: str, answer_summary: str, collection: str) -> None:
-    """Store query+answer in MemoryWeb as a session memory. Fire-and-forget."""
+async def _memoryweb_store(query: str, answer_summary: str, collection: str,
+                            query_log_id: int | None = None) -> None:
+    """Store query+answer in MemoryWeb via durable bridge_queue. Fire-and-forget."""
     if not _MEMORYWEB_ENABLED:
         return
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            await client.post(
-                f"{_MEMORYWEB_URL}/api/ingest/session",
-                json={
-                    "source": f"ultra-rag:{collection}",
-                    "content": f"Q: {query}\nA: {answer_summary}",
-                    "tags": ["ultra-rag", collection],
-                },
+        import json as _json
+        # Sanitize inputs
+        safe_query = query.replace("\x00", "")[:2000]
+        safe_answer = answer_summary.replace("\x00", "")[:3000]
+
+        # Synthesize a 2-sentence summary via local LLM (gemma3 is fast, already loaded)
+        summary = await asyncio.to_thread(
+            _synthesize_bridge_summary, safe_query, safe_answer, collection
+        )
+
+        # Write to durable queue (postgres) — survives server restarts
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO rag.bridge_queue
+                   (query_text, collection, summary, query_log_id, status)
+                   VALUES (%s, %s, %s, %s, 'pending')""",
+                (safe_query, collection, summary, query_log_id)
             )
-    except Exception:
-        pass
+        conn.commit()
+        log.debug("bridge_queue: queued query for collection=%s", collection)
+    except Exception as exc:
+        log.warning("_memoryweb_store failed (non-fatal): %s", exc)
+
+
+def _synthesize_bridge_summary(query: str, answer: str, collection: str) -> str:
+    """Call gemma3 via Ollama to produce a 2-sentence memory-quality summary. Sync."""
+    try:
+        prompt = (
+            f"Summarize in exactly 2 sentences what was asked and what was found. "
+            f"Be specific and factual. No preamble.\n\n"
+            f"Query: {query}\n\n"
+            f"Result: {answer[:1500]}"
+        )
+        resp = httpx.post(
+            "http://localhost:11434/api/generate",
+            json={"model": "mistral:7b", "prompt": prompt, "stream": False,
+                  "options": {"num_predict": 100, "temperature": 0.1}},
+            timeout=30.0,
+        )
+        if resp.status_code == 200:
+            text = resp.json().get("response", "").strip()
+            if text:
+                return text[:500]
+    except Exception as exc:
+        log.warning("summarizer failed, using fallback: %s", exc)
+    # Fallback: truncated answer as summary
+    return f"Query about {collection}: {query[:100]}. Result: {answer[:300]}"
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +445,66 @@ def _get_conn():
 
 
 # ---------------------------------------------------------------------------
+# RLS-scoped connection for query operations
+# ---------------------------------------------------------------------------
+
+_RAG_APP_DSN = (
+    "host=localhost port=5432 dbname=postgres "
+    "user=rag_app password=ragapp_rls_2026"
+)
+
+_scoped_conn = None
+
+
+def _get_scoped_conn(collection: str):
+    """
+    Return a psycopg2 connection authenticated as rag_app (no BYPASSRLS),
+    with the RLS session variable set so only rows for `collection` are visible.
+
+    When collection is '' (empty string), admin mode: all rows visible.
+    This is called for all /api/search and /api/stats query paths.
+    Ingest paths use _get_conn() (superuser) so they can write freely.
+    """
+    global _scoped_conn
+    import psycopg2  # noqa: PLC0415
+    if _scoped_conn is None or _scoped_conn.closed:
+        _scoped_conn = psycopg2.connect(_RAG_APP_DSN)
+    try:
+        _scoped_conn.cursor().execute("SELECT 1")
+    except Exception:
+        _scoped_conn = psycopg2.connect(_RAG_APP_DSN)
+
+    # Set the RLS session variable — safe_col prevents SQL injection
+    safe_col = collection.replace("'", "''") if collection else ""
+    with _scoped_conn.cursor() as cur:
+        cur.execute(f"SET app.rag_collection = '{safe_col}'")
+    _scoped_conn.commit()
+    return _scoped_conn
+
+
+# ---------------------------------------------------------------------------
 # Startup / shutdown
 # ---------------------------------------------------------------------------
+
+def _cleanup_mw_sessions() -> None:
+    """Remove stale mw-session JSONL files older than 24 h (called at startup)."""
+    import time
+    session_dir = str(Path(__file__).resolve().parent / "data" / "mw-sessions")
+    if not os.path.isdir(session_dir):
+        return
+    cutoff = time.time() - 86400
+    removed = 0
+    for fname in os.listdir(session_dir):
+        fp = os.path.join(session_dir, fname)
+        try:
+            if os.path.getmtime(fp) < cutoff:
+                os.unlink(fp)
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        log.info("Cleaned up %d stale mw-session file(s) older than 24h.", removed)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -397,6 +512,8 @@ async def startup_event():
     conn = _get_conn()
     await asyncio.to_thread(_ensure_schemas, conn)
     log.info("Schemas ready.")
+    # Clean up stale MemoryWeb session files from previous runs
+    await asyncio.to_thread(_cleanup_mw_sessions)
     # Warm up the reranker in background (avoids 5s first-query delay)
     async def _warm_reranker():
         try:
@@ -421,12 +538,25 @@ def _ensure_schemas(conn) -> None:
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
-async def root():
-    """Serve the Ultra RAG dashboard."""
-    index_path = _static_dir / "index.html"
-    if not index_path.exists():
-        return HTMLResponse(content="<h1>Dashboard not found — place index.html in static/</h1>", status_code=404)
-    return FileResponse(str(index_path), media_type="text/html")
+async def root(request: Request):
+    """Admin dashboard — localhost only. External requests get 403."""
+    if not _is_localhost(request):
+        raise HTTPException(status_code=403, detail="This endpoint is only accessible from localhost.")
+    admin_path = _static_dir / "admin.html"
+    if not admin_path.exists():
+        return HTMLResponse(content="<h1>Admin dashboard not found</h1>", status_code=404)
+    return FileResponse(str(admin_path), media_type="text/html")
+
+
+@app.get("/admin", response_class=HTMLResponse, tags=["UI"])
+async def admin_dashboard(request: Request):
+    """Admin dashboard alias — localhost only."""
+    if not _is_localhost(request):
+        raise HTTPException(status_code=403, detail="Admin dashboard is only accessible from localhost.")
+    admin_path = _static_dir / "admin.html"
+    if not admin_path.exists():
+        return HTMLResponse(content="<h1>Admin dashboard not found</h1>", status_code=404)
+    return FileResponse(str(admin_path), media_type="text/html")
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +900,8 @@ async def stats(request: Request, collection: str = Query("my-docs", description
     _check_collection_access(collection, request, api_key)
 
     def _fetch(coll: str) -> StatsResponse:
-        conn = _get_conn()
+        # Use RLS-scoped connection so stats cannot leak cross-collection data
+        conn = _get_scoped_conn(coll)
         counts: dict[str, int] = {}
 
         def _q(sql, params=()):
@@ -825,7 +956,10 @@ async def search(req: SearchRequest, request: Request,
 
     def _run():
         from ultra_query import run_ultra_query  # noqa: PLC0415
-        conn = _get_conn()
+        # Use RLS-scoped connection (rag_app role, no BYPASSRLS) so
+        # PostgreSQL row-level security enforces collection isolation at
+        # the DB layer — not just at the HTTP/application layer.
+        conn = _get_scoped_conn(req.collection)
         result = run_ultra_query(
             conn,
             query=req.query,
@@ -851,7 +985,8 @@ async def search(req: SearchRequest, request: Request,
     # Fire-and-forget: store this query in MemoryWeb
     top_content = result.get("results", [{}])[0].get("content", "")[:200] if result.get("results") else ""
     if top_content:
-        asyncio.create_task(_memoryweb_store(req.query, top_content, req.collection))
+        _qlog_id: int | None = result.get("query_log_id") or None
+        asyncio.create_task(_memoryweb_store(req.query, top_content, req.collection, query_log_id=_qlog_id))
 
     # Convert results to ResultItem list
     items = []
@@ -953,7 +1088,7 @@ async def entities(req: EntityQuery, request: Request,
     _check_collection_access(req.collection, request, api_key)
     def _fetch() -> list:
         import psycopg2.extras  # noqa: PLC0415
-        conn = _get_conn()
+        conn = _get_scoped_conn(req.collection)
         conditions = ["collection = %s"]
         params: list = [req.collection]
 
@@ -1003,7 +1138,7 @@ async def communities(req: CommunityQuery, request: Request,
     _check_collection_access(req.collection, request, api_key)
     def _fetch() -> list:
         import psycopg2.extras  # noqa: PLC0415
-        conn = _get_conn()
+        conn = _get_scoped_conn(req.collection)
         conditions = ["collection = %s"]
         params: list = [req.collection]
 

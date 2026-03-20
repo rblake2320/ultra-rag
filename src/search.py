@@ -10,7 +10,7 @@ import httpx
 import psycopg2.extras
 
 from .config import get_config
-from .embedder import _embed_batch
+from .embedder import _embed_batch, get_embedder
 
 log = logging.getLogger(__name__)
 
@@ -19,17 +19,34 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=512)
-def _cached_embed(query: str, model: str, ollama_url: str) -> tuple:
-    """Embed a query string, caching results by (query, model) key."""
+def _cached_embed_ollama(query: str, model: str, ollama_url: str) -> tuple:
+    """Embed via Ollama, caching by (query, model) key."""
     emb = _embed_batch([query], ollama_url, model)
     return tuple(emb[0]) if emb else ()
 
 
+# Simple dict cache for local-provider embeddings (avoids repeated GPU calls)
+_local_embed_cache: dict = {}
+
+
 def _get_query_embedding(query: str) -> list:
-    """Return embedding for query, using cache when available."""
-    cfg_emb = get_config()["embedding"]
-    result = _cached_embed(query.strip(), cfg_emb["model"], cfg_emb["ollama_url"])
-    return list(result) if result else []
+    """Return embedding for query, using provider-aware cache."""
+    cfg_emb  = get_config()["embedding"]
+    provider = cfg_emb.get("provider", "ollama").lower()
+    model    = cfg_emb["model"]
+
+    if provider == "local":
+        key = (query.strip(), model)
+        if key not in _local_embed_cache:
+            from .embedder import _embed_batch_local  # noqa: PLC0415
+            emb = _embed_batch_local([query.strip()], model, batch_size=1)
+            _local_embed_cache[key] = emb[0] if emb else []
+        return list(_local_embed_cache[key])
+    else:
+        result = _cached_embed_ollama(
+            query.strip(), model, cfg_emb.get("ollama_url", "http://localhost:11434")
+        )
+        return list(result) if result else []
 
 
 def _rrf_score(rank: int, k: int) -> float:
@@ -107,8 +124,9 @@ def search(conn, query: str, collection: str,
             return cur.fetchall()
 
     # ── Run search tiers ─────────────────────────────────────────────
-    kw_results  = []
-    vec_results = []
+    kw_results      = []
+    vec_results     = []
+    colbert_results = []
 
     if force_tier == 1:
         kw_results = _keyword_search()
@@ -126,17 +144,37 @@ def search(conn, query: str, collection: str,
         except Exception as e:
             log.warning(f"Vector search failed: {e}; falling back to keyword only")
 
+    # ── Optional ColBERT retrieval ────────────────────────────────────
+    colbert_enabled = cfg.get("colbert_enabled", False)
+    if colbert_enabled and force_tier not in (1, 2):
+        try:
+            from .colbert_retriever import get_colbert_retriever  # noqa: PLC0415
+            retriever = get_colbert_retriever()
+            if retriever.index_exists(collection):
+                colbert_results = retriever.search(query, collection, top_k=n_fetch)
+                # Enrich ColBERT-exclusive results with full DB metadata
+                known_ids = {r["id"] for r in kw_results + vec_results}
+                colbert_results = _enrich_colbert_results(conn, colbert_results, known_ids)
+            else:
+                log.debug("ColBERT: no index for collection '%s'; skipping", collection)
+        except Exception as e:
+            log.warning("ColBERT retrieval failed: %s; skipping", e)
+
     # ── RRF Fusion ───────────────────────────────────────────────────
+    k_colbert = cfg.get("rrf_k_colbert", 60)
     rrf_scores: dict[int, float] = {}
 
     for rank, row in enumerate(kw_results, 1):
         rrf_scores[row["id"]] = rrf_scores.get(row["id"], 0) + _rrf_score(rank, k_kw)
     for rank, row in enumerate(vec_results, 1):
         rrf_scores[row["id"]] = rrf_scores.get(row["id"], 0) + _rrf_score(rank, k_vec)
+    for rank, row in enumerate(colbert_results, 1):
+        rid = row["id"]
+        rrf_scores[rid] = rrf_scores.get(rid, 0) + _rrf_score(rank, k_colbert)
 
     # Build merged result set
     all_rows: dict[int, dict] = {}
-    for row in kw_results + vec_results:
+    for row in kw_results + vec_results + colbert_results:
         if row["id"] not in all_rows:
             all_rows[row["id"]] = dict(row)
 
@@ -158,6 +196,44 @@ def search(conn, query: str, collection: str,
         row["score"] = round(rrf_scores.get(row["id"], 0.0), 6)
 
     return merged
+
+
+def _enrich_colbert_results(conn, colbert_results: list, known_ids: set) -> list:
+    """
+    Fetch full chunk metadata from DB for ColBERT-exclusive results.
+
+    Chunks that appear only in ColBERT (not in keyword or vector results)
+    will be missing content_type, context_prefix, chunk_metadata, token_count.
+    This fetches those fields so the merged result set is uniform.
+    """
+    missing_ids = [r["id"] for r in colbert_results if r["id"] not in known_ids]
+    if not missing_ids:
+        return colbert_results
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, content, content_type, context_prefix,
+                       chunk_metadata, token_count
+                FROM rag.chunks
+                WHERE id = ANY(%s)
+            """, (missing_ids,))
+            db_rows = {r["id"]: dict(r) for r in cur.fetchall()}
+    except Exception as e:
+        log.debug("ColBERT enrich DB lookup failed: %s", e)
+        return colbert_results
+
+    enriched = []
+    for hit in colbert_results:
+        if hit["id"] in db_rows:
+            db_row = db_rows[hit["id"]]
+            merged = dict(db_row)
+            merged["score"]  = hit["score"]
+            merged["source"] = "colbert"
+            enriched.append(merged)
+        else:
+            enriched.append(hit)
+    return enriched
 
 
 def _nim_rerank(query: str, candidates: list, top_k: int, cfg: dict) -> list:

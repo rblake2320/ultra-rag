@@ -1,5 +1,11 @@
 """
-Synchronous batch embedder via Ollama nomic-embed-text.
+Batch embedder with two providers:
+  - local: sentence-transformers SentenceTransformer (NV-Embed-v2, GPU)
+  - ollama: Ollama HTTP API (nomic-embed-text, fallback)
+
+Provider is selected from config.yaml embedding.provider.
+embed_collection() auto-routes based on config.
+
 Embeds context_prefix + content for richer retrieval vectors.
 Updates rag.chunks.embedding in-place.
 """
@@ -13,6 +19,9 @@ import psycopg2.extras
 from .config import get_config
 
 log = logging.getLogger(__name__)
+
+# Module-level singleton for the local sentence-transformers model
+_model_cache: dict = {}
 
 
 def _sanitize(text: str, max_chars: int = 6000) -> str:
@@ -28,6 +37,10 @@ def _sanitize(text: str, max_chars: int = 6000) -> str:
     return text[:max_chars].strip()
 
 
+# ---------------------------------------------------------------------------
+# Ollama provider
+# ---------------------------------------------------------------------------
+
 def _embed_batch(texts: list, ollama_url: str, model: str) -> list:
     """Call Ollama /api/embed for a batch of texts. Returns list of float lists."""
     clean = [_sanitize(t) for t in texts]
@@ -41,6 +54,93 @@ def _embed_batch(texts: list, ollama_url: str, model: str) -> list:
     return data.get("embeddings", [])
 
 
+# ---------------------------------------------------------------------------
+# Local sentence-transformers provider (NV-Embed-v2 and similar)
+# ---------------------------------------------------------------------------
+
+def _get_local_model(model_name: str):
+    """Return cached SentenceTransformer instance for *model_name*."""
+    if model_name not in _model_cache:
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            import torch  # noqa: PLC0415
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            log.info("Embedder: loading local model '%s' on %s ...", model_name, device)
+
+            # NV-Embed-v2 requires trust_remote_code for its custom pooling head
+            model = SentenceTransformer(
+                model_name,
+                device=device,
+                trust_remote_code=True,
+            )
+            _model_cache[model_name] = model
+            log.info("Embedder: local model '%s' ready.", model_name)
+        except Exception as exc:
+            log.error("Embedder: failed to load local model '%s': %s", model_name, exc)
+            raise
+
+    return _model_cache[model_name]
+
+
+def _embed_batch_local(texts: list, model_name: str, batch_size: int = 4) -> list:
+    """
+    Embed *texts* using a local sentence-transformers SentenceTransformer.
+
+    NV-Embed-v2 uses a task prefix for asymmetric retrieval:
+      query encoding : model.encode([query], prompt_name="query")
+      passage encoding: model.encode([passage])  ← no prompt for documents
+
+    At index time we always embed passages (no prompt).
+
+    Returns list of float lists.
+    """
+    clean  = [_sanitize(t) for t in texts]
+    model  = _get_local_model(model_name)
+
+    # NV-Embed-v2 recommends normalize_embeddings=True for cosine similarity
+    embeddings = model.encode(
+        clean,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    # Returns numpy array (n, dim); convert to plain Python lists
+    return [emb.tolist() for emb in embeddings]
+
+
+# ---------------------------------------------------------------------------
+# Provider-agnostic router
+# ---------------------------------------------------------------------------
+
+def get_embedder():
+    """
+    Return a callable (texts: list[str]) → list[list[float]] based on config.
+
+    Reads config.yaml embedding.provider:
+      'local'  → sentence-transformers (NV-Embed-v2, GPU)
+      'ollama' → Ollama HTTP API (nomic-embed-text)
+    """
+    cfg      = get_config()["embedding"]
+    provider = cfg.get("provider", "ollama").lower()
+    model    = cfg["model"]
+    batch_sz = cfg.get("batch_size", 4)
+
+    if provider == "local":
+        def _fn(texts: list) -> list:
+            return _embed_batch_local(texts, model, batch_size=batch_sz)
+    else:
+        url = cfg["ollama_url"]
+        def _fn(texts: list) -> list:
+            return _embed_batch(texts, url, model)
+
+    return _fn
+
+
+# ---------------------------------------------------------------------------
+# Main entry point: embed a whole collection
+# ---------------------------------------------------------------------------
+
 def embed_collection(conn, collection: str) -> int:
     """
     Embed all un-embedded chunks for a collection.
@@ -50,9 +150,15 @@ def embed_collection(conn, collection: str) -> int:
     """
     cfg      = get_config()["embedding"]
     model    = cfg["model"]
-    url      = cfg["ollama_url"]
-    batch_sz = cfg.get("batch_size", 32)
+    provider = cfg.get("provider", "ollama").lower()
+    url      = cfg.get("ollama_url", "http://localhost:11434")
+    batch_sz = cfg.get("batch_size", 4)
     dims     = cfg.get("dimensions", 768)
+
+    log.info(
+        "Embedder: provider=%s model=%s dims=%d batch_size=%d",
+        provider, model, dims, batch_sz,
+    )
 
     # Fetch un-embedded chunks
     with conn.cursor() as cur:
@@ -69,8 +175,12 @@ def embed_collection(conn, collection: str) -> int:
         return 0
 
     log.info(f"Embedding {len(rows)} chunks for collection '{collection}'...")
-    t0 = time.time()
+    t0    = time.time()
     total = 0
+
+    # Pre-load local model once (avoid repeated load per batch)
+    if provider == "local":
+        _get_local_model(model)
 
     for batch_start in range(0, len(rows), batch_sz):
         batch = rows[batch_start: batch_start + batch_sz]
@@ -85,20 +195,29 @@ def embed_collection(conn, collection: str) -> int:
                 texts.append(content)
 
         try:
-            embeddings = _embed_batch(texts, url, model)
+            if provider == "local":
+                embeddings = _embed_batch_local(texts, model, batch_size=batch_sz)
+            else:
+                embeddings = _embed_batch(texts, url, model)
         except Exception as e:
             # Batch too large — fall back to one-at-a-time
             log.warning(f"Batch at index {batch_start} failed ({e}), retrying one-by-one...")
             embeddings = []
             for i, text in enumerate(texts):
                 try:
-                    emb = _embed_batch([text], url, model)
+                    if provider == "local":
+                        emb = _embed_batch_local([text], model, batch_size=1)
+                    else:
+                        emb = _embed_batch([text], url, model)
                     embeddings.append(emb[0] if emb else None)
                 except Exception as e2:
                     # Last resort: truncate hard to 3000 chars and retry
                     try:
                         short = _sanitize(text, max_chars=3000)
-                        emb = _embed_batch([short], url, model)
+                        if provider == "local":
+                            emb = _embed_batch_local([short], model, batch_size=1)
+                        else:
+                            emb = _embed_batch([short], url, model)
                         embeddings.append(emb[0] if emb else None)
                         log.warning(f"  Chunk id={ids[i]} embedded after truncation to 3000 chars")
                     except Exception as e3:
