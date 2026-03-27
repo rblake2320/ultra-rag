@@ -1294,5 +1294,50 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+import threading
+
+# New variables
+INDEX_QUEUE = []
+INDEX_STATUS = {"processing": False}
+
+# New endpoint
+@app.post("/api/index/queue")
+async def index_queue(request: Request, data: Dict[str, str] = Body(...)):
+    """Add document to index queue."""
+    text, collection, doc_id = data["text"], data["collection"], data["doc_id"]
+    INDEX_QUEUE.append((text, collection, doc_id))
+    position = len(INDEX_QUEUE) - 1
+    return {"queued": True, "position": position}
+
+# New endpoint
+@app.get("/api/index/queue/status")
+async def index_queue_status(request: Request):
+    """Get index queue status."""
+    queue_length = len(INDEX_QUEUE)
+    processing = INDEX_STATUS["processing"]
+    return {"queue_length": queue_length, "processing": processing}
+
+# New background task
+def _process_index_queue():
+    """Process index queue in background."""
+    while True:
+        if INDEX_QUEUE:
+            text, collection, doc_id = INDEX_QUEUE.pop(0)
+            INDEX_STATUS["processing"] = True
+            # TODO: implement indexing logic here
+            # For now, just log and sleep
+            log.info("Indexing %s (%s)", doc_id, collection)
+            time.sleep(1)  # simulate indexing time
+            INDEX_STATUS["processing"] = False
+        else:
+            time.sleep(0.1)  # wait for new tasks
+
+# Start background task
+thread = threading.Thread(target=_process_index_queue)
+thread.daemon = True  # stop when main thread stops
+thread.start()
+
 if __name__ == "__main__":
     main()
