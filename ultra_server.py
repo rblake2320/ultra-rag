@@ -1294,5 +1294,65 @@ def main():
     )
 
 
+
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+# ...
+
+@app.get("/api/stats")
+async def get_stats(request: Request):
+    """Return overall statistics."""
+    total_documents = 0
+    total_collections = 0
+    total_searches_today = 0
+    avg_search_time_ms = 0.0
+    most_searched_collection = ""
+
+    # Count documents and collections
+    for collection in get_collections():
+        total_collections += 1
+        total_documents += get_document_count(collection)
+
+    # Calculate searches today
+    if "SEARCH_HISTORY" in globals():
+        today = datetime.now()
+        searches_today = [s for s in SEARCH_HISTORY if s["timestamp"].date() == today.date()]
+        total_searches_today = len(searches_today)
+
+        # Calculate average search time
+        if searches_today:
+            total_time_ms = sum(s["search_time_ms"] for s in searches_today)
+            avg_search_time_ms = total_time_ms / len(searches_today)
+
+        # Find most searched collection
+        collection_counts = defaultdict(int)
+        for s in searches_today:
+            collection_counts[s["collection"]] += 1
+        if collection_counts:
+            most_searched_collection = max(collection_counts, key=collection_counts.get)
+
+    return JSONResponse(
+        content={
+            "total_documents": total_documents,
+            "total_collections": total_collections,
+            "total_searches_today": total_searches_today,
+            "avg_search_time_ms": avg_search_time_ms,
+            "most_searched_collection": most_searched_collection,
+        },
+        media_type="application/json",
+    )
+
+# Helper functions
+def get_collections():
+    # Replace with actual implementation to get collection names
+    # For demonstration purposes, assume a list of collection names
+    return ["collection1", "collection2", "collection3"]
+
+def get_document_count(collection: str):
+    # Replace with actual implementation to get document count for a collection
+    # For demonstration purposes, assume a fixed document count
+    return 10
+
 if __name__ == "__main__":
     main()
