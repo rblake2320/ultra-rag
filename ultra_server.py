@@ -1294,5 +1294,12 @@ def main():
     )
 
 
+
+from datetime import datetime
+
+@app.on_event("startup")
+async def startup_event():
+    log.info(f"Starting Ultra RAG Server v1.0 at {datetime.now()}.")
+
 if __name__ == "__main__":
     main()
