@@ -1294,5 +1294,37 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+import requests
+
+# New function/endpoint
+def _check_provider(url: str) -> bool:
+    """Check if a provider is reachable with a quick HTTP GET."""
+    try:
+        response = requests.get(url, timeout=1)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+@router.get("/api/providers")
+async def get_providers() -> Dict[str, Any]:
+    """Return the list of configured embedding and LLM providers with their status."""
+    from src.config import get_config
+    cfg = get_config()
+    embedding_provider = cfg.get("embedding", {}).get("provider", "")
+    llm_provider = cfg.get("llm", {}).get("provider", "")
+    providers = []
+    for provider in cfg.get("providers", []):
+        url = provider.get("url", "")
+        name = provider.get("name", "")
+        reachable = _check_provider(url) if url else False
+        providers.append({"name": name, "url": url, "reachable": reachable})
+    return {
+        "embedding_provider": embedding_provider,
+        "llm_provider": llm_provider,
+        "providers": providers,
+    }
+
 if __name__ == "__main__":
     main()
