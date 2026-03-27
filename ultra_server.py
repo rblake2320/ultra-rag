@@ -1294,5 +1294,20 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+import uuid
+import logging
+
+# New middleware to inject a unique X-Request-ID UUID header to every response
+@app.middleware("http")
+async def add_request_id_header(request, call_next):
+    request_id = uuid.uuid4()
+    headers = [("X-Request-ID", str(request_id))]
+    response = await call_next(request)
+    response.headers.update(headers)
+    log.info(f"Request ID {request_id} processed with response status {response.status_code}")
+    return response
+
 if __name__ == "__main__":
     main()
