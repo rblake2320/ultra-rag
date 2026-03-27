@@ -1294,5 +1294,27 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+from slowapi import Limiter, _rate_limit_exceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+from fastapi import HTTPException
+
+# Add Limiter and attach to app
+app.state.limiter = Limiter(default_limits=["100/minute"])
+app.add_middleware(SlowAPIMiddleware)
+
+# Add rate limiting to POST /api/search endpoint
+@app.post("/api/search")
+@limiter.limit("30/minute")
+async def search(request: Request, query: str = Form(...), collection: str = Form("personal")):
+    # existing code ...
+
+# Handle rate limit exceeded
+@app.exception_handler(RateLimitExceeded)
+async def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
+    raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
 if __name__ == "__main__":
     main()
