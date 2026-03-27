@@ -1294,5 +1294,36 @@ def main():
     )
 
 
+
+# Import statements needed (only new ones not in existing code)
+from fastapi import FastAPI, File, UploadFile, HTTPException
+
+# New endpoint for document upload
+@FastAPI.post("/api/upload")
+async def upload_document(file: UploadFile = File(...), collection: str):
+    if not _is_localhost(request):
+        raise HTTPException(status_code=403, detail="Uploads from external sources are not allowed.")
+    
+    if not _API_KEY:
+        raise HTTPException(status_code=403, detail="API key is required for uploads.")
+    
+    # Ensure the collection is valid
+    if collection.lower() not in _COLLECTION_KEYS:
+        raise HTTPException(status_code=400, detail="Invalid collection name.")
+    
+    # Create a temporary file path
+    temp_file_path = tempfile.mktemp(dir="/tmp/uploads/", suffix=".txt")
+    
+    # Write the file to the temporary path
+    with open(temp_file_path, "wb") as buffer:
+        content = await file.file.read()
+        buffer.write(content)
+    
+    # Get file size in bytes
+    size_bytes = len(content)
+    
+    # Return the upload response
+    return {"ok": True, "filename": file.filename, "collection": collection, "size_bytes": size_bytes}
+
 if __name__ == "__main__":
     main()
