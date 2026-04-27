@@ -1,6 +1,8 @@
 """
 Unified LLM client: Ollama (primary) → Claude API (fallback).
 Used for KG extraction, summarization, contextual retrieval, and query routing.
+Supports Ollama by default, with optional TensorRT-LLM OpenAI-compatible serving
+for low-latency local inference.
 
 Usage:
     from src.llm import LLMClient
@@ -34,13 +36,14 @@ _DEFAULT_OLLAMA_URL        = "http://localhost:11434"
 
 class LLMClient:
     """
-    Thin wrapper around Ollama's /api/generate endpoint with a Claude fallback.
+    Thin wrapper around local LLM serving with a Claude fallback.
 
     Attributes
     ----------
     provider : str
-        "ollama" (default) or "claude".  If Ollama is unreachable the client
-        automatically falls back to Claude when ANTHROPIC_API_KEY is set.
+        "ollama" (default), "trtllm", or "claude".  If the configured local
+        provider is unreachable the client tries Ollama, then Claude when
+        ANTHROPIC_API_KEY is set.
     model : str
         Model name sent to Ollama (e.g. "deepseek-r1:32b").
     ollama_url : str
@@ -49,14 +52,16 @@ class LLMClient:
 
     def __init__(
         self,
-        provider: str = "ollama",
+        provider: Optional[str] = None,
         model: Optional[str] = None,
     ) -> None:
         cfg = get_config()
         llm_cfg = cfg.get("llm", {})
 
-        self.provider   = provider
+        self.provider   = provider or llm_cfg.get("provider", "ollama")
         self.ollama_url = llm_cfg.get("ollama_url", _DEFAULT_OLLAMA_URL).rstrip("/")
+        self.trtllm_url = llm_cfg.get("trtllm_url", "http://localhost:8000").rstrip("/")
+        self.trtllm_api_key = llm_cfg.get("trtllm_api_key", os.environ.get("TRTLLM_API_KEY", ""))
 
         # Model resolution priority: constructor arg > config > hardcoded default
         if model:
@@ -104,7 +109,23 @@ class LLMClient:
         """
         effective_system = self._build_system(system, json_mode)
 
-        # Primary: Ollama
+        if self.provider == "trtllm":
+            try:
+                return self._trtllm_complete(prompt, effective_system, max_tokens)
+            except Exception as exc:
+                log.warning(
+                    "TensorRT-LLM completion failed (%s); trying Ollama fallback.",
+                    exc,
+                )
+
+        if self.provider == "claude":
+            try:
+                return self._claude_complete(prompt, effective_system, max_tokens)
+            except Exception as exc:
+                log.error("Claude completion failed: %s", exc)
+                return ""
+
+        # Primary/default fallback: Ollama
         try:
             return self._ollama_complete(prompt, effective_system, max_tokens)
         except Exception as exc:
@@ -218,6 +239,49 @@ class LLMClient:
         # Ollama returns {"response": "...", "done": true, ...}
         text = data.get("response", "")
         return text.strip()
+
+    def _trtllm_complete(
+        self,
+        prompt: str,
+        system: Optional[str],
+        max_tokens: int,
+    ) -> str:
+        """
+        POST to a TensorRT-LLM OpenAI-compatible /v1/chat/completions server.
+
+        Speculative decoding is configured on the TensorRT-LLM server process
+        via trtllm-serve --extra_llm_api_options, not per request.
+        """
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {"Content-Type": "application/json"}
+        if self.trtllm_api_key:
+            headers["Authorization"] = f"Bearer {self.trtllm_api_key}"
+
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0,
+            "stream": False,
+        }
+
+        resp = httpx.post(
+            f"{self.trtllm_url}/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=180.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+        message = choices[0].get("message", {})
+        return str(message.get("content", "")).strip()
 
     def _claude_complete(
         self,

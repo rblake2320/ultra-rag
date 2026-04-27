@@ -1,0 +1,17 @@
+# TensorRT-LLM speculative decoding options for trtllm-serve/trtllm-bench.
+#
+# Use NGram first because it supports all models and does not require a
+# separate draft model. It is most useful for interactive, low-batch requests.
+#
+# Example:
+#   trtllm-serve /path/to/target_model \
+#     --host 0.0.0.0 \
+#     --port 8000 \
+#     --extra_llm_api_options D:\ultra-rag\configs\trtllm-speculative-ngram.yaml
+
+disable_overlap_scheduler: true
+speculative_config:
+  decoding_type: NGram
+  max_draft_len: 3
+  max_matching_ngram_size: 4
+  is_public_pool: true

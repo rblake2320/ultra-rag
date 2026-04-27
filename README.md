@@ -258,6 +258,34 @@ Interactive docs at `http://localhost:8300/docs`
 | `/api/stats` | GET | Collection statistics |
 | `/api/health` | GET | DB, Ollama, pgvector health check |
 
+### Optional TensorRT-LLM Speculative Decoding
+
+UltraRAG uses Ollama by default. For low-latency local generation, you can run a
+TensorRT-LLM OpenAI-compatible server and switch `llm.provider` to `trtllm` in
+`config.yaml`.
+
+Start with NGram speculation because it supports all models and does not need a
+separate draft model:
+
+```bash
+trtllm-serve /path/to/target_model \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --extra_llm_api_options D:\ultra-rag\configs\trtllm-speculative-ngram.yaml
+```
+
+Then set:
+
+```yaml
+llm:
+  provider: trtllm
+  trtllm_url: "http://localhost:8000"
+```
+
+Keep Ollama running as fallback while benchmarking. Speculative decoding is most
+likely to help interactive low-batch queries; benchmark UltraRAG search and
+synthesis prompts before making it the default.
+
 Example search request:
 ```json
 POST /api/search

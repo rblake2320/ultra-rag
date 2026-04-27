@@ -50,6 +50,11 @@ llm:
   model:       deepseek-r1:32b   # used for KG extraction, RAPTOR, communities
   fast_model:  gemma3:latest     # used for contextual retrieval, routing
   ollama_url:  "http://localhost:11434"
+  # Optional: switch provider to "trtllm" when a TensorRT-LLM OpenAI-compatible
+  # server is running. Speculative decoding is enabled in the trtllm-serve
+  # process via configs/trtllm-speculative-ngram.yaml.
+  trtllm_url:  "http://localhost:8000"
+  trtllm_api_key: ""
   max_tokens:  2000
 
 kg:
