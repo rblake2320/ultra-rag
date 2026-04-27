@@ -24,9 +24,9 @@ collections:
 
 db:
   host:     localhost
-  port:     5432
-  database: postgres
-  user:     postgres
+  port:     5433
+  database: memoryweb
+  user:     memoryweb
   password: "${RAG_DB_PASSWORD}"   # set in .env or shell environment
 
 embedding:
