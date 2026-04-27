@@ -8,6 +8,7 @@ $NSSM = "D:\tools\nssm\nssm.exe"
 $PYTHON = "C:\Python312\python.exe"
 $RAG_DIR = "D:\ultra-rag"
 $LOG_DIR = "$RAG_DIR\logs"
+$USER_SITE_PACKAGES = "C:\Users\techai\AppData\Roaming\Python\Python312\site-packages"
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -26,7 +27,9 @@ if (-not (Test-Path "$RAG_DIR\.env")) {
 
 $existing = Get-Service UltraRAG-API -ErrorAction SilentlyContinue
 if ($existing) {
-    & $NSSM stop UltraRAG-API 2>$null
+    if ($existing.Status -ne "Stopped") {
+        & $NSSM stop UltraRAG-API
+    }
     & $NSSM remove UltraRAG-API confirm 2>$null
 }
 
@@ -35,6 +38,7 @@ if ($existing) {
 & $NSSM set UltraRAG-API AppDirectory $RAG_DIR
 & $NSSM set UltraRAG-API AppStdout "$LOG_DIR\ultrarag_service.log"
 & $NSSM set UltraRAG-API AppStderr "$LOG_DIR\ultrarag_service_err.log"
+& $NSSM set UltraRAG-API AppEnvironmentExtra "PYTHONPATH=$USER_SITE_PACKAGES"
 & $NSSM set UltraRAG-API AppStdoutCreationDisposition 4
 & $NSSM set UltraRAG-API AppStderrCreationDisposition 4
 & $NSSM set UltraRAG-API AppRotateFiles 1
