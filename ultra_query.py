@@ -407,8 +407,8 @@ def run_ultra_query(
     SelfRAG = _try_import("src.self_rag", "SelfRAG")
     if SelfRAG and results:
         try:
-            def _self_search_fn(q, top_k_inner=5):
-                return _search_hybrid(conn, q, collection, top_k_inner)
+            def _self_search_fn(q, top_k=5):
+                return _search_hybrid(conn, q, collection, top_k)
 
             self_rag = SelfRAG()
             results = self_rag.adaptive_retrieve_and_filter(query, _self_search_fn, results)
