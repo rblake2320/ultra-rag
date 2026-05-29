@@ -49,3 +49,7 @@ pypdf>=4.0.0
 # torch already installed
 # Pillow is needed if you want to manipulate images locally before sending to VLM:
 Pillow>=10.0.0
+
+# ── Test / dev dependencies ─────────────────────────────────────────────────
+pytest>=8.0.0
+fakeredis>=2.20.0          # hermetic Redis for semantic-cache tests (no live server)
