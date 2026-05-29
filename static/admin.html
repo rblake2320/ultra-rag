@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ultra RAG — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #060810; --bg2: #0d1120; --card: #0f1628; --card2: #141c35;
+      --border: rgba(59,130,246,0.12); --border-glow: rgba(59,130,246,0.35);
+      --blue: #3b82f6; --cyan: #06b6d4; --green: #22d3a5; --yellow: #f59e0b;
+      --muted: #4a5580; --text: #c8d6f0; --text-dim: #5a6a90;
+      --mono: 'JetBrains Mono', monospace; --sans: 'Syne', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text); font-family: var(--sans);
+      min-height: 100vh; overflow-x: hidden;
+      background-image: linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    body::after {
+      content: ''; position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 400px;
+      background: radial-gradient(ellipse, rgba(59,130,246,0.08) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+    .layout { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto; padding: 0 24px 48px; }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 0 24px; border-bottom: 1px solid var(--border); gap: 16px;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-mark {
+      width: 32px; height: 32px; background: linear-gradient(135deg, var(--blue), var(--cyan));
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 14px; font-weight: 700; color: white;
+      box-shadow: 0 0 20px rgba(59,130,246,0.4);
+    }
+    .logo-text { font-family: var(--sans); font-size: 18px; font-weight: 800; letter-spacing: -0.5px; color: white; }
+    .logo-text span { background: linear-gradient(90deg, var(--blue), var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .logo-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 1px; color: var(--cyan); background: rgba(6,182,212,0.1); border: 1px solid rgba(6,182,212,0.25); border-radius: 4px; padding: 2px 6px; margin-left: 4px; }
+    .tabs { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+    .tab { font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: 0.5px; color: var(--muted); background: none; border: none; padding: 7px 18px; border-radius: 7px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .tab.active { color: white; background: linear-gradient(135deg, rgba(59,130,246,0.25), rgba(6,182,212,0.15)); border: 1px solid var(--border-glow); box-shadow: 0 0 12px rgba(59,130,246,0.15); }
+    .tab:hover:not(.active) { color: var(--text); background: rgba(255,255,255,0.04); }
+    .live-badge { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse-glow 2s ease-in-out infinite; flex-shrink: 0; }
+    @keyframes pulse-glow { 0%,100%{box-shadow:0 0 4px var(--green);transform:scale(1)} 50%{box-shadow:0 0 14px var(--green),0 0 24px rgba(34,211,165,0.3);transform:scale(1.2)} }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 24px; animation: fadeUp 0.5s ease both; }
+    .stats-grid-2 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 14px; animation: fadeUp 0.5s 0.1s ease both; }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; position: relative; overflow: hidden; transition: border-color 0.2s, box-shadow 0.2s; }
+    .stat-card:hover { border-color: var(--border-glow); box-shadow: 0 0 24px rgba(59,130,246,0.08); }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--blue), var(--cyan)); opacity: 0.5; }
+    .stat-card.compact { padding: 14px 18px; }
+    .stat-card.compact .stat-value { font-size: 22px; }
+    .stat-label { font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; }
+    .stat-value { font-family: var(--mono); font-size: 32px; font-weight: 700; color: white; letter-spacing: -1px; line-height: 1; margin-bottom: 4px; }
+    .stat-value.blue  { color: var(--blue);  text-shadow: 0 0 20px rgba(59,130,246,0.4); }
+    .stat-value.cyan  { color: var(--cyan);  text-shadow: 0 0 20px rgba(6,182,212,0.4); }
+    .stat-value.green { color: var(--green); text-shadow: 0 0 20px rgba(34,211,165,0.4); }
+    .stat-sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+    .stat-bar { height: 4px; background: rgba(255,255,255,0.06); border-radius: 99px; margin-top: 12px; overflow: hidden; }
+    .stat-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 99px; transition: width 1s cubic-bezier(0.4,0,0.2,1); box-shadow: 0 0 8px rgba(6,182,212,0.5); width: 0%; }
+    .pipeline-section { margin-top: 20px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 24px; animation: fadeUp 0.5s 0.2s ease both; }
+    .section-title { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 14px; }
+    .pipeline-stages { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .stage { background: var(--bg2); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; transition: border-color 0.3s; }
+    .stage.done    { border-color: rgba(34,211,165,0.25); background: rgba(34,211,165,0.04); }
+    .stage.running { border-color: rgba(245,158,11,0.3);  background: rgba(245,158,11,0.04); }
+    .stage-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-dim); }
+    .stage.done    .stage-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .stage.running .stage-dot { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); animation: pulse-yellow 1.5s ease-in-out infinite; }
+    @keyframes pulse-yellow { 0%,100%{box-shadow:0 0 4px var(--yellow)} 50%{box-shadow:0 0 12px var(--yellow),0 0 20px rgba(245,158,11,0.4)} }
+    .stage-info { flex: 1; min-width: 0; }
+    .stage-name { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--text); letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stage-pct  { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .stage.done    .stage-pct { color: var(--green); }
+    .stage.running .stage-pct { color: var(--yellow); }
+    .stage-mini-bar { height: 2px; background: rgba(255,255,255,0.06); border-radius: 99px; margin-top: 6px; overflow: hidden; }
+    .stage-mini-fill { height: 100%; border-radius: 99px; background: var(--cyan); transition: width 1s ease; width: 0%; }
+    .stage.done .stage-mini-fill { background: var(--green); }
+    .search-section { margin-top: 20px; animation: fadeUp 0.5s 0.3s ease both; }
+    .search-box { display: flex; gap: 10px; align-items: center; }
+    .search-input-wrap { flex: 1; position: relative; display: flex; align-items: center; }
+    .search-icon { position: absolute; left: 16px; color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .search-input { width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 14px 44px; font-family: var(--mono); font-size: 13px; color: white; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
+    .search-input::placeholder { color: var(--text-dim); }
+    .search-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,0.12), 0 0 20px rgba(59,130,246,0.08); }
+    .search-collection-select { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); outline: none; cursor: pointer; transition: border-color 0.2s; -webkit-appearance: none; }
+    .search-collection-select:focus { border-color: var(--blue); }
+    .search-btn { background: linear-gradient(135deg, var(--blue), #2563eb); border: none; border-radius: 10px; padding: 14px 24px; font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; color: white; cursor: pointer; transition: all 0.2s; white-space: nowrap; box-shadow: 0 4px 12px rgba(59,130,246,0.25); }
+    .search-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,130,246,0.4); }
+    .search-btn:disabled { opacity: 0.7; cursor: wait; transform: none; }
+    .error-bar { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: 8px; padding: 10px 16px; font-family: var(--mono); font-size: 11px; color: #fca5a5; margin-top: 10px; display: none; }
+    .results-section { margin-top: 16px; }
+    .divider { height: 1px; background: var(--border); margin: 20px 0; }
+    .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .results-count { font-family: var(--mono); font-size: 11px; color: var(--text-dim); letter-spacing: 0.5px; }
+    .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+    .result-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s; animation: fadeUp 0.3s ease both; }
+    .result-card:hover { border-color: var(--border-glow); box-shadow: 0 4px 20px rgba(59,130,246,0.08); transform: translateY(-1px); }
+    .result-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    .result-source { font-family: var(--mono); font-size: 10px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+    .result-badges { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+    .badge { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; border-radius: 4px; padding: 2px 7px; white-space: nowrap; }
+    .badge-type  { background: rgba(59,130,246,0.12); color: var(--blue);  border: 1px solid rgba(59,130,246,0.2); }
+    .badge-score { background: rgba(6,182,212,0.12);  color: var(--cyan);  border: 1px solid rgba(6,182,212,0.2); }
+    .result-title { font-family: var(--sans); font-size: 13px; font-weight: 600; color: white; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .result-text  { font-family: var(--mono); font-size: 11px; color: var(--text-dim); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .state-empty { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+    .state-empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
+    .state-empty-title { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--text-dim); margin-bottom: 4px; }
+    .state-empty-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid rgba(59,130,246,0.2); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto 12px; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .result-card:nth-child(1){animation-delay:0s}.result-card:nth-child(2){animation-delay:.05s}.result-card:nth-child(3){animation-delay:.1s}.result-card:nth-child(4){animation-delay:.15s}.result-card:nth-child(5){animation-delay:.2s}.result-card:nth-child(6){animation-delay:.25s}.result-card:nth-child(7){animation-delay:.3s}.result-card:nth-child(8){animation-delay:.35s}.result-card:nth-child(9){animation-delay:.4s}.result-card:nth-child(10){animation-delay:.45s}
+    @media(max-width:1024px){.stats-grid,.stats-grid-2{grid-template-columns:repeat(2,1fr)}.pipeline-stages{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:640px){header{flex-wrap:wrap}.stats-grid,.stats-grid-2{grid-template-columns:1fr 1fr}.pipeline-stages{grid-template-columns:1fr 1fr}.search-box{flex-wrap:wrap}.search-collection-select,.search-btn{width:100%}.results-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <header>
+    <div class="logo">
+      <div class="logo-mark">U</div>
+      <span class="logo-text">Ultra<span>RAG</span></span>
+      <span class="logo-badge">ADMIN</span>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-col="personal" onclick="switchCollection('personal')">Personal</button>
+    </div>
+    <div class="live-badge">
+      <div class="pulse-dot"></div>
+      <span id="syncLabel">Loading...</span>
+    </div>
+  </header>
+
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-label">Total Chunks</div><div class="stat-value blue" id="val-chunks">-</div><div class="stat-sub" id="sub-chunks">Parsed text segments</div></div>
+    <div class="stat-card"><div class="stat-label">Documents</div><div class="stat-value" id="val-docs">-</div><div class="stat-sub">Source files ingested</div></div>
+    <div class="stat-card"><div class="stat-label">Embedded</div><div class="stat-value cyan" id="val-embedded">-</div><div class="stat-bar"><div class="stat-bar-fill" id="bar-embedded"></div></div><div class="stat-sub" id="sub-embedded">of chunks vectorized</div></div>
+    <div class="stat-card"><div class="stat-label">KG Entities</div><div class="stat-value green" id="val-entities">-</div><div class="stat-sub" id="sub-entities">Knowledge graph nodes</div></div>
+  </div>
+  <div class="stats-grid-2">
+    <div class="stat-card compact"><div class="stat-label">Relationships</div><div class="stat-value" id="val-rels">-</div></div>
+    <div class="stat-card compact"><div class="stat-label">Communities</div><div class="stat-value" id="val-communities">-</div></div>
+    <div class="stat-card compact"><div class="stat-label">Contextual Done</div><div class="stat-value cyan" id="val-contextual">-</div><div class="stat-bar" style="margin-top:8px"><div class="stat-bar-fill" id="bar-contextual"></div></div></div>
+    <div class="stat-card compact"><div class="stat-label">RAPTOR Summaries</div><div class="stat-value" id="val-raptor">-</div></div>
+  </div>
+
+  <div class="pipeline-section">
+    <div class="section-title">Pipeline Health</div>
+    <div class="pipeline-stages" id="pipelineStages"></div>
+  </div>
+
+  <div class="search-section">
+    <div class="search-box">
+      <div class="search-input-wrap">
+        <span class="search-icon">o</span>
+        <input class="search-input" id="searchInput" type="text" placeholder="Search your knowledge base..." autocomplete="off" spellcheck="false" />
+      </div>
+      <select class="search-collection-select" id="searchCollection"><option value="personal">Personal</option></select>
+      <button class="search-btn" id="searchBtn" onclick="doSearch()">Search</button>
+    </div>
+    <div class="error-bar" id="searchError"></div>
+  </div>
+
+  <div class="results-section" id="resultsSection" style="display:none">
+    <div class="divider"></div>
+    <div class="results-header"><div class="results-count" id="resultsCount"></div></div>
+    <div class="results-grid" id="resultsGrid"></div>
+  </div>
+</div>
+
+<script>
+  let activeCollection='personal',statsCache={personal:null},lastFetchTime=null,syncLabelTimer=null;
+  function switchCollection(col){activeCollection=col;document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.col===col));document.getElementById('searchCollection').value=col;if(statsCache[col])renderStats(statsCache[col]);else fetchStats(col);}
+  async function fetchStats(col){try{const r=await fetch('/api/stats?collection='+col);if(!r.ok)throw new Error();const d=await r.json();statsCache[col]=d;if(col===activeCollection)renderStats(d);}catch(e){console.error(e);}}
+  async function fetchAllStats(){await Promise.all([fetchStats('personal')]);lastFetchTime=Date.now();startSyncLabel();}
+  function startSyncLabel(){if(syncLabelTimer)clearInterval(syncLabelTimer);updateSyncLabel();syncLabelTimer=setInterval(updateSyncLabel,1000);}
+  function updateSyncLabel(){if(!lastFetchTime)return;const s=Math.floor((Date.now()-lastFetchTime)/1000);document.getElementById('syncLabel').textContent=s<60?'Updated '+s+'s ago':'Updated '+Math.floor(s/60)+'m ago';}
+  function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1000)return n.toLocaleString();return String(n);}
+  function animateNumber(id,target,suffix){suffix=suffix||'';const el=document.getElementById(id);if(!el)return;const dur=900,t0=performance.now();function tick(now){const t=Math.min((now-t0)/dur,1),e=1-Math.pow(1-t,3);el.textContent=fmt(Math.round(target*e))+suffix;if(t<1)requestAnimationFrame(tick);else el.textContent=fmt(target)+suffix;}requestAnimationFrame(tick);}
+  function renderStats(d){
+    const chunks=d.chunks||0,embedded=d.embedded_chunks||0,contextual=d.contextual_done||0;
+    const embPct=chunks>0?Math.round(embedded/chunks*100):0,ctxPct=chunks>0?Math.round(contextual/chunks*100):0;
+    animateNumber('val-chunks',chunks);animateNumber('val-docs',d.documents||0);animateNumber('val-embedded',embPct,'%');
+    animateNumber('val-entities',d.entities||0);animateNumber('val-rels',d.relationships||0);animateNumber('val-communities',d.communities||0);
+    animateNumber('val-contextual',ctxPct,'%');animateNumber('val-raptor',d.summaries||0);
+    document.getElementById('sub-embedded').textContent=fmt(embedded)+' of '+fmt(chunks)+' chunks';
+    document.getElementById('sub-entities').textContent=fmt(d.relationships||0)+' relationships';
+    setTimeout(()=>{document.getElementById('bar-embedded').style.width=embPct+'%';document.getElementById('bar-contextual').style.width=ctxPct+'%';},100);
+    const stages=[
+      {name:'Parse & Embed',done:embPct>=100,running:embPct>0&&embPct<100,pct:embPct+'%',bar:embPct},
+      {name:'Contextual',done:ctxPct>=100,running:ctxPct>0&&ctxPct<100,pct:ctxPct>0?ctxPct+'%':'pending',bar:ctxPct},
+      {name:'Knowledge Graph',done:(d.entities||0)>0,running:false,pct:(d.entities||0)>0?fmt(d.entities)+' entities':'pending',bar:(d.entities||0)>0?100:0},
+      {name:'Communities',done:(d.communities||0)>0,running:false,pct:(d.communities||0)>0?fmt(d.communities)+' clusters':'pending',bar:(d.communities||0)>0?100:0},
+      {name:'RAPTOR',done:(d.summaries||0)>0,running:false,pct:(d.summaries||0)>0?fmt(d.summaries)+' summaries':'pending',bar:(d.summaries||0)>0?100:0},
+    ];
+    document.getElementById('pipelineStages').innerHTML=stages.map(s=>`<div class="stage ${s.done?'done':s.running?'running':'pending'}"><div class="stage-dot"></div><div class="stage-info"><div class="stage-name">${s.name}</div><div class="stage-pct">${s.pct}</div><div class="stage-mini-bar"><div class="stage-mini-fill" style="width:${s.bar}%"></div></div></div></div>`).join('');
+  }
+  document.getElementById('searchInput').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
+  document.getElementById('searchCollection').addEventListener('change',function(){switchCollection(this.value);});
+  async function doSearch(){
+    const query=document.getElementById('searchInput').value.trim(),col=document.getElementById('searchCollection').value;
+    const btn=document.getElementById('searchBtn'),err=document.getElementById('searchError'),sec=document.getElementById('resultsSection'),grid=document.getElementById('resultsGrid'),cnt=document.getElementById('resultsCount');
+    if(!query)return;
+    btn.textContent='Searching...';btn.disabled=true;err.style.display='none';
+    grid.innerHTML='<div class="state-empty" style="grid-column:1/-1"><div class="spinner"></div><div class="state-empty-sub">Querying knowledge base...</div></div>';
+    sec.style.display='block';
+    try{
+      const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,collection:col,top_k:10})});
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.detail||'HTTP '+r.status);}
+      const data=await r.json(),results=data.results||[];
+      cnt.textContent=results.length+' result'+(results.length!==1?'s':'')+' for "'+query+'"';
+      if(!results.length){grid.innerHTML='<div class="state-empty" style="grid-column:1/-1"><div class="state-empty-icon">O</div><div class="state-empty-title">No results found</div><div class="state-empty-sub">Try different terms or check embedding progress</div></div>';}
+      else{
+        grid.innerHTML=results.map(r=>{
+          const text=(r.content||r.text||'').trim(),ctype=(r.content_type||r.chunk_type||'text').replace(/_/g,' ');
+          const score=r.rerank_score||r.score||0,sd=Math.max(0,score<=1?score:score/10);
+          const meta=r.chunk_metadata||{},src=meta.source_section||meta.file_path||'',title=r.title||src||'result';
+          const preview=text.slice(0,220).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return '<div class="result-card"><div class="result-card-header"><div class="result-source">'+src+'</div><div class="result-badges"><span class="badge badge-type">'+ctype+'</span><span class="badge badge-score">'+(sd*100).toFixed(1)+'%</span></div></div><div class="result-title">'+title+'</div><div class="result-text">'+preview+(text.length>220?'...':'')+'</div></div>';
+        }).join('');
+      }
+    }catch(e){err.textContent='! '+e.message;err.style.display='block';grid.innerHTML='<div class="state-empty" style="grid-column:1/-1"><div class="state-empty-title">Search failed</div><div class="state-empty-sub">'+e.message+'</div></div>';}
+    finally{btn.textContent='Search';btn.disabled=false;}
+  }
+  fetchAllStats();setInterval(fetchAllStats,30000);
+</script>
+</body>
+</html>
