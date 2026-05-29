@@ -78,7 +78,7 @@ def create_schema(conn) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS rag_chunks_stable ON rag.chunks(stable_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS rag_chunks_tsv ON rag.chunks USING gin(content_tsv);")
         cur.execute("CREATE INDEX IF NOT EXISTS rag_chunks_meta ON rag.chunks USING gin(chunk_metadata jsonb_path_ops);")
-        # HNSW index only if pgvector is ready
+        # HNSW index for fp32 dense search
         try:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS rag_chunks_emb
@@ -86,7 +86,20 @@ def create_schema(conn) -> None:
                 WITH (m=16, ef_construction=200);
             """)
         except Exception as e:
-            log.warning(f"Could not create HNSW index: {e}")
+            log.warning("Could not create HNSW fp32 index: %s", e)
+
+        # halfvec expression index (pgvector >= 0.7.0) — 50% memory reduction,
+        # near-identical recall. Used automatically when query casts to halfvec.
+        try:
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS rag_chunks_emb_halfvec
+                ON rag.chunks USING hnsw ((embedding::halfvec(768)) halfvec_cosine_ops)
+                WITH (m=16, ef_construction=200);
+            """)
+            log.info("halfvec expression index created/verified on rag.chunks.")
+        except Exception as e:
+            log.debug("halfvec index skipped (pgvector < 0.7.0 or dim mismatch): %s", e)
+
         conn.commit()
     log.info("Schema ready: rag.documents + rag.chunks")
 

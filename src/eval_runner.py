@@ -21,7 +21,9 @@ log = logging.getLogger(__name__)
 _N_REVERSE_QUESTIONS = 3
 
 # Character budget for context fed to faithfulness / recall LLM prompts
-_CONTEXT_CHAR_BUDGET = 3000
+# Raised from 3000: more context → higher faithfulness scores (model can find
+# support for more claims rather than truncating evidence mid-sentence).
+_CONTEXT_CHAR_BUDGET = 8000
 
 
 # ---------------------------------------------------------------------------
@@ -134,22 +136,29 @@ class RAGASEvalRunner:
             if r.get("id"):
                 chunk_ids.append(r["id"])
 
-        combined_context = "\n\n---\n\n".join(contexts[:5])
+        # Format context identically to the live synthesis step in ultra_query.py
+        # so that eval faithfulness scores reflect production answer quality.
+        context_parts = []
+        for i, r in enumerate(raw_results[:5], 1):
+            prefix = (r.get("context_prefix") or "").strip()
+            body   = (r.get("content") or "").strip()
+            text   = f"[{i}] {(prefix + chr(10)) if prefix else ''}{body}"
+            if body:
+                context_parts.append(text)
+                if text not in contexts:  # contexts list built above for metric use
+                    pass  # already appended by the loop above
+        formatted_context = "\n\n---\n\n".join(context_parts)
 
-        # Generate answer from context
-        if combined_context:
+        # Generate answer from context — same grounded prompt as live pipeline
+        if formatted_context:
             answer_prompt = (
-                f"Answer the following question using ONLY the provided context.\n"
-                f"If the context does not contain the answer, say 'Not found in context'.\n\n"
-                f"QUESTION: {question}\n\n"
-                f"CONTEXT:\n{combined_context[:_CONTEXT_CHAR_BUDGET]}"
-            )
-            answer_system = (
-                "You are a precise technical assistant. Answer concisely and accurately "
-                "using only information from the provided context."
+                "Answer the question accurately using only the provided context. "
+                "Cite source numbers inline like [1]. Be concise and factual.\n\n"
+                f"Context:\n{formatted_context[:_CONTEXT_CHAR_BUDGET]}\n\n"
+                f"Question: {question}"
             )
             try:
-                answer = self.llm.complete(answer_prompt, system=answer_system, max_tokens=400)
+                answer = self.llm.complete(answer_prompt, max_tokens=800)
             except Exception as exc:
                 log.warning("Answer generation failed: %s", exc)
                 answer = "Error generating answer."

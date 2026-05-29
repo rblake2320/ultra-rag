@@ -303,6 +303,8 @@ def run_ultra_query(
     strategy_override: Optional[str] = None,
     no_rerank: bool = False,
     no_crag: bool = False,
+    synthesize: bool = True,
+    answer_max_tokens: int = 1500,
 ) -> dict:
     """
     Execute the full Ultra RAG query pipeline.
@@ -314,6 +316,22 @@ def run_ultra_query(
     """
     from typing import Optional  # noqa: PLC0415 — already imported at module top
     t_start = time.time()
+
+    # ── 0. Semantic cache check ───────────────────────────────────────
+    _cache = None
+    _query_embedding = None
+    try:
+        from src.semantic_cache import SemanticCache  # noqa: PLC0415
+        from src.search import _get_query_embedding   # noqa: PLC0415
+        _cache = SemanticCache()
+        if _cache.enabled:
+            _query_embedding = _get_query_embedding(query)
+            cached = _cache.get(query, collection, _query_embedding)
+            if cached is not None:
+                return cached
+    except Exception as _exc:
+        log.debug("Semantic cache check failed (non-fatal): %s", _exc)
+        _cache = None
 
     # ── 1. Route ──────────────────────────────────────────────────────
     if strategy_override:
@@ -425,7 +443,33 @@ def run_ultra_query(
     for rank, r in enumerate(results, 1):
         r["provenance_components"] = _build_provenance_components(r, rank)
 
-    # ── 9. Log query ──────────────────────────────────────────────────
+    # ── 9. LLM Synthesis ─────────────────────────────────────────────
+    # Generate a final grounded answer from the top retrieved chunks.
+    # Skipped when synthesize=False (streaming endpoint handles this itself).
+    answer = ""
+    if synthesize and results:
+        try:
+            from src.llm import LLMClient  # noqa: PLC0415
+            context_parts = []
+            for i, r in enumerate(results[:5], 1):
+                prefix = (r.get("context_prefix") or "").strip()
+                body   = (r.get("content") or "").strip()
+                context_parts.append(
+                    f"[{i}] {(prefix + chr(10)) if prefix else ''}{body}"
+                )
+            context = "\n\n---\n\n".join(context_parts)
+            prompt = (
+                "Answer the question accurately using only the provided context. "
+                "Cite source numbers inline like [1]. Be concise and factual.\n\n"
+                f"Context:\n{context}\n\nQuestion: {query}"
+            )
+            llm = LLMClient()
+            answer = llm.complete(prompt, max_tokens=answer_max_tokens)
+        except Exception as exc:
+            log.warning("Synthesis step failed (non-fatal): %s", exc)
+            answer = ""
+
+    # ── 10. Log query ─────────────────────────────────────────────────
     latency_ms = int((time.time() - t_start) * 1000)
     query_log_id = 0
     try:
@@ -457,8 +501,34 @@ def run_ultra_query(
     if query_log_id and results:
         provenance_chain_id = _log_provenance_chain(conn, query_log_id, results)
 
+    _result = {
+        "results":              results,
+        "answer":               answer,
+        "strategy_used":        strategy,
+        "quality_score":        quality_score,
+        "corrective_action":    corrective_action,
+        "latency_ms":           latency_ms,
+        "query_log_id":         query_log_id,
+        "provenance_chain_id":  provenance_chain_id,
+        "classification":       classification,
+    }
+
+    # Cache the result for future identical/similar queries (skip low-quality results)
+    if _cache is not None and quality_score >= 0.6 and results:
+        try:
+            # Strip non-serializable provenance components before caching
+            cacheable = dict(_result)
+            cacheable["results"] = [
+                {k: v for k, v in r.items() if k != "provenance_components"}
+                for r in results
+            ]
+            _cache.set(query, collection, cacheable, _query_embedding)
+        except Exception as _exc:
+            log.debug("Semantic cache set failed (non-fatal): %s", _exc)
+
     return {
         "results":              results,
+        "answer":               answer,
         "strategy_used":        strategy,
         "quality_score":        quality_score,
         "corrective_action":    corrective_action,
@@ -526,6 +596,14 @@ def _print_results(query_result: dict, show_provenance: bool = False) -> None:
         if show_provenance and r.get("provenance_components"):
             pc = r["provenance_components"]
             print(f"    Provenance: {pc}")
+
+    # Show synthesized answer if present
+    answer = (query_result.get("answer") or "").strip()
+    if answer:
+        print(f"\n{'─'*72}")
+        print("ANSWER:")
+        for line in answer.split("\n"):
+            print(f"  {line}")
 
     print(f"\n{'='*72}")
     if show_provenance and query_result.get("provenance_chain_id"):

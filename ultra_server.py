@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -39,15 +40,33 @@ from typing import Any, Dict, List, Optional
 logs_dir = Path(__file__).parent / "logs"
 logs_dir.mkdir(exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(logs_dir / "ultra_server.log", encoding="utf-8"),
-    ],
-)
+_JSON_LOGS = os.environ.get("ULTRA_RAG_JSON_LOGS", "").lower() == "true"
+
+if _JSON_LOGS:
+    try:
+        from pythonjsonlogger import jsonlogger as _jl
+        _json_fmt = _jl.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        _handlers = [
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(logs_dir / "ultra_server.log", encoding="utf-8"),
+        ]
+        for _h in _handlers:
+            _h.setFormatter(_json_fmt)
+        logging.basicConfig(level=logging.INFO, handlers=_handlers)
+    except ImportError:
+        _JSON_LOGS = False
+
+if not _JSON_LOGS:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(logs_dir / "ultra_server.log", encoding="utf-8"),
+        ],
+    )
+
 log = logging.getLogger(__name__)
 
 # ── Project root ──────────────────────────────────────────────────────────────
@@ -59,7 +78,7 @@ try:
     import httpx
     from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Security, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
     from fastapi.security.api_key import APIKeyHeader
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
@@ -67,6 +86,43 @@ except ImportError as exc:
     print(f"ERROR: FastAPI/uvicorn not installed. Run: pip install fastapi uvicorn httpx")
     print(f"  {exc}")
     sys.exit(1)
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator as _PFI
+    from prometheus_client import Counter as _PCounter, Histogram as _PHistogram
+    _PROMETHEUS_OK = True
+except ImportError:
+    _PROMETHEUS_OK = False
+    log.warning("prometheus-fastapi-instrumentator not installed — /metrics disabled.")
+
+if _PROMETHEUS_OK:
+    RAG_STRATEGY_COUNTER = _PCounter(
+        "ultra_rag_strategy_total", "RAG strategy invocations", ["strategy"]
+    )
+    RAG_QUERY_LATENCY = _PHistogram(
+        "ultra_rag_query_latency_seconds", "RAG query pipeline latency", ["strategy"],
+        buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
+    )
+    RAG_RERANK_SCORE = _PHistogram(
+        "ultra_rag_top_rerank_score", "Distribution of top rerank scores",
+        buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    )
+    RAG_INGEST_COUNTER = _PCounter(
+        "ultra_rag_ingest_total", "Ingest pipeline invocations", ["stage", "status"]
+    )
+else:
+    # Stub so the rest of the code can call .labels(...).inc() safely
+    class _MetricStub:
+        def labels(self, **_): return self
+        def inc(self, *_): pass
+        def observe(self, *_): pass
+    RAG_STRATEGY_COUNTER = RAG_QUERY_LATENCY = RAG_RERANK_SCORE = RAG_INGEST_COUNTER = _MetricStub()
+
+# ── Auth hardening flag ───────────────────────────────────────────────────────
+# Set ULTRA_RAG_DISABLE_LOCALHOST_TRUST=true in production / tunneled deployments
+# to force all requests (including 127.0.0.1) to present a valid API key.
+_DISABLE_LOCALHOST_TRUST = os.environ.get("ULTRA_RAG_DISABLE_LOCALHOST_TRUST", "").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # API Key Auth — multi-tenant collection isolation
@@ -121,8 +177,8 @@ def _check_api_key(request: Request, api_key: str = Security(_api_key_header)) -
     """Global auth check — used for admin/system endpoints."""
     if not _API_KEY:
         return   # no global key configured — open mode
-    if _is_localhost(request):
-        return   # localhost always trusted
+    if _is_localhost(request) and not _DISABLE_LOCALHOST_TRUST:
+        return   # localhost trusted unless ULTRA_RAG_DISABLE_LOCALHOST_TRUST=true
     if api_key != _API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
@@ -139,7 +195,7 @@ def _check_collection_access(collection: str, request: Request,
       4. If no keys configured at all: open (should only be LAN)
       5. Otherwise: reject
     """
-    if _is_localhost(request):
+    if _is_localhost(request) and not _DISABLE_LOCALHOST_TRUST:
         return
 
     col = collection.lower()
@@ -222,8 +278,12 @@ async def _memoryweb_store(query: str, answer_summary: str, collection: str,
 
 
 def _synthesize_bridge_summary(query: str, answer: str, collection: str) -> str:
-    """Call gemma3 via Ollama to produce a 2-sentence memory-quality summary. Sync."""
+    """Call a fast model via Ollama to produce a 2-sentence memory-quality summary. Sync."""
     try:
+        from src.config import get_config  # noqa: PLC0415
+        cfg = get_config()
+        ollama_url = cfg.get("llm", {}).get("ollama_url", "http://localhost:11434").rstrip("/")
+        bridge_model = cfg.get("llm", {}).get("bridge_summary_model", "mistral:7b")
         prompt = (
             f"Summarize in exactly 2 sentences what was asked and what was found. "
             f"Be specific and factual. No preamble.\n\n"
@@ -231,8 +291,8 @@ def _synthesize_bridge_summary(query: str, answer: str, collection: str) -> str:
             f"Result: {answer[:1500]}"
         )
         resp = httpx.post(
-            "http://localhost:11434/api/generate",
-            json={"model": "mistral:7b", "prompt": prompt, "stream": False,
+            f"{ollama_url}/api/generate",
+            json={"model": bridge_model, "prompt": prompt, "stream": False,
                   "options": {"num_predict": 100, "temperature": 0.1}},
             timeout=30.0,
         )
@@ -306,10 +366,13 @@ class SearchRequest(BaseModel):
     include_parent:     bool            = False
     no_rerank:          bool            = False
     no_crag:            bool            = False
+    synthesize:         bool            = True   # generate a grounded final answer
+    answer_max_tokens:  int             = Field(1500, ge=100, le=4000)
 
 
 class SearchResponse(BaseModel):
     results:            List[ResultItem]
+    answer:             Optional[str]   = None   # LLM-synthesized grounded answer
     strategy_used:      str
     quality_score:      float
     latency_ms:         int
@@ -363,6 +426,7 @@ class HealthResponse(BaseModel):
     pgvector:  str
     timestamp: str
     memoryweb: str = "unknown"
+    cache:     str = "unknown"
     systems_online: int = 0
 
 
@@ -410,11 +474,22 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Allowed origins driven by env var so production can restrict to real domains.
+# Defaults cover common local dev ports; set ULTRA_RAG_CORS_ORIGINS in prod.
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "ULTRA_RAG_CORS_ORIGINS",
+        "http://localhost,http://127.0.0.1,http://localhost:5173,http://localhost:3000,http://localhost:8300",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 # ── Static files ───────────────────────────────────────────────────────────────
@@ -422,26 +497,35 @@ _static_dir = Path(__file__).parent / "static"
 _static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
+# ── Prometheus /metrics endpoint ──────────────────────────────────────────────
+if _PROMETHEUS_OK:
+    _PFI().instrument(app).expose(app, endpoint="/metrics", include_in_schema=True)
+
 
 # ---------------------------------------------------------------------------
-# DB pool (one persistent connection per worker — FastAPI is single-process)
+# Thread-local DB connections
+#
+# psycopg2 connections are NOT thread-safe. The old code used two module-global
+# singletons shared across asyncio.to_thread workers, which is a real concurrency
+# bug under concurrent requests. Using threading.local() gives each thread pool
+# worker its own dedicated connection at zero cost to callers.
 # ---------------------------------------------------------------------------
 
-_conn = None
+_tl = threading.local()       # superuser connections (ingest / admin paths)
+_tl_scoped = threading.local()  # rag_app-role connections (RLS-scoped query paths)
 
 
 def _get_conn():
-    global _conn
-    if _conn is None or _conn.closed:
+    conn = getattr(_tl, "conn", None)
+    if conn is None or conn.closed:
         from src.db import get_conn  # noqa: PLC0415
-        _conn = get_conn()
+        _tl.conn = conn = get_conn()
     try:
-        # Quick liveness check
-        _conn.cursor().execute("SELECT 1")
+        conn.cursor().execute("SELECT 1")
     except Exception:
         from src.db import get_conn  # noqa: PLC0415
-        _conn = get_conn()
-    return _conn
+        _tl.conn = conn = get_conn()
+    return conn
 
 
 # ---------------------------------------------------------------------------
@@ -453,33 +537,30 @@ _RAG_APP_DSN = (
     "user=rag_app password=ragapp_rls_2026"
 )
 
-_scoped_conn = None
-
 
 def _get_scoped_conn(collection: str):
-    """
-    Return a psycopg2 connection authenticated as rag_app (no BYPASSRLS),
+    """Return a per-thread psycopg2 connection authenticated as rag_app (no BYPASSRLS),
     with the RLS session variable set so only rows for `collection` are visible.
 
     When collection is '' (empty string), admin mode: all rows visible.
     This is called for all /api/search and /api/stats query paths.
     Ingest paths use _get_conn() (superuser) so they can write freely.
     """
-    global _scoped_conn
     import psycopg2  # noqa: PLC0415
-    if _scoped_conn is None or _scoped_conn.closed:
-        _scoped_conn = psycopg2.connect(_RAG_APP_DSN)
+    conn = getattr(_tl_scoped, "conn", None)
+    if conn is None or conn.closed:
+        _tl_scoped.conn = conn = psycopg2.connect(_RAG_APP_DSN)
     try:
-        _scoped_conn.cursor().execute("SELECT 1")
+        conn.cursor().execute("SELECT 1")
     except Exception:
-        _scoped_conn = psycopg2.connect(_RAG_APP_DSN)
+        _tl_scoped.conn = conn = psycopg2.connect(_RAG_APP_DSN)
 
     # Set the RLS session variable — safe_col prevents SQL injection
     safe_col = collection.replace("'", "''") if collection else ""
-    with _scoped_conn.cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute(f"SET app.rag_collection = '{safe_col}'")
-    _scoped_conn.commit()
-    return _scoped_conn
+    conn.commit()
+    return conn
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +590,20 @@ def _cleanup_mw_sessions() -> None:
 @app.on_event("startup")
 async def startup_event():
     log.info("Ultra RAG Server starting up…")
+
+    # ── Security state audit ──────────────────────────────────────────────────
+    if not _API_KEY and not _COLLECTION_KEYS:
+        log.warning(
+            "SECURITY: No API keys configured — server running in OPEN MODE. "
+            "Set ULTRA_RAG_API_KEY and ULTRA_RAG_KEY_<COLLECTION> to enable auth."
+        )
+    else:
+        log.info("Auth: %d key(s) configured.", (1 if _API_KEY else 0) + len(_COLLECTION_KEYS))
+    if _DISABLE_LOCALHOST_TRUST:
+        log.info("Auth: localhost auto-trust DISABLED (all requests must present a key).")
+    if _JSON_LOGS:
+        log.info("Logging: JSON structured output enabled.")
+
     conn = _get_conn()
     await asyncio.to_thread(_ensure_schemas, conn)
     log.info("Schemas ready.")
@@ -524,6 +619,35 @@ async def startup_event():
         except Exception as exc:
             log.debug("Reranker warmup skipped: %s", exc)
     asyncio.create_task(_warm_reranker())
+
+    # Start adversarial blind-spot scheduler for each active collection
+    # Runs run_full_cycle() every `adversarial.schedule_hours` (default 24h).
+    # search_fn is wired to the same hybrid pipeline used by /api/search.
+    async def _start_adversarial():
+        try:
+            from src.adversarial import AdversarialTester  # noqa: PLC0415
+            adv_cfg = get_config().get("adversarial", {})
+            interval_h = int(adv_cfg.get("schedule_hours", 24))
+            adv_conn = _get_conn()
+            # Determine active collections from DB
+            with adv_conn.cursor() as cur:
+                cur.execute("select distinct collection from rag.chunks")
+                collections = [r[0] for r in cur.fetchall()]
+            for coll in collections:
+                def _make_search_fn(c):
+                    def _search_fn(query: str, top_k: int = 5):
+                        from ultra_query import run_ultra_query  # noqa: PLC0415
+                        conn2 = _get_conn()
+                        res = run_ultra_query(conn2, query, c, top_k=top_k,
+                                             no_crag=True, synthesize=False)
+                        return res.get("results", [])
+                    return _search_fn
+                tester = AdversarialTester(adv_conn, coll, search_fn=_make_search_fn(coll))
+                tester.schedule_background_run(interval_hours=interval_h)
+                log.info("Adversarial scheduler started for collection=%s interval=%dh", coll, interval_h)
+        except Exception as exc:
+            log.warning("Adversarial scheduler startup failed (non-fatal): %s", exc)
+    asyncio.create_task(_start_adversarial())
 
 
 def _ensure_schemas(conn) -> None:
@@ -874,6 +998,16 @@ async def health():
         except Exception:
             memoryweb_status = "offline"
 
+    # Semantic cache check
+    cache_status = "disabled"
+    if os.environ.get("ULTRA_RAG_CACHE", "true").lower() == "true":
+        try:
+            from src.semantic_cache import SemanticCache  # noqa: PLC0415
+            sc = SemanticCache()
+            cache_status = "ok" if sc.enabled else "offline"
+        except Exception:
+            cache_status = "offline"
+
     overall = "ok" if all(s == "ok" for s in [db_status, pgvector_status, ollama_status]) else "degraded"
     systems_seen = sum(1 for s in list(_SYSTEMS.values()) + list(_LAPTOPS.values())
                        if s.get("last_seen"))
@@ -884,6 +1018,7 @@ async def health():
         ollama=ollama_status,
         pgvector=pgvector_status,
         memoryweb=memoryweb_status,
+        cache=cache_status,
         systems_online=systems_seen,
         timestamp=datetime.utcnow().isoformat(),
     )
@@ -968,6 +1103,8 @@ async def search(req: SearchRequest, request: Request,
             strategy_override=req.strategy,
             no_rerank=req.no_rerank,
             no_crag=req.no_crag,
+            synthesize=req.synthesize,
+            answer_max_tokens=req.answer_max_tokens,
         )
         return result
 
@@ -976,6 +1113,15 @@ async def search(req: SearchRequest, request: Request,
     except Exception as exc:
         log.error("/api/search failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+    # Emit Prometheus metrics
+    strategy = result.get("strategy_used", "hybrid")
+    RAG_STRATEGY_COUNTER.labels(strategy=strategy).inc()
+    latency = result.get("latency_ms", 0) / 1000.0
+    RAG_QUERY_LATENCY.labels(strategy=strategy).observe(latency)
+    top_rerank = result.get("results", [{}])[0].get("rerank_score") if result.get("results") else None
+    if top_rerank is not None:
+        RAG_RERANK_SCORE.observe(float(top_rerank))
 
     # Attach MemoryWeb memories to first result's provenance (if available)
     memories = await memory_task
@@ -1006,6 +1152,7 @@ async def search(req: SearchRequest, request: Request,
 
     return SearchResponse(
         results=items,
+        answer=result.get("answer") or None,
         strategy_used=result.get("strategy_used", "hybrid"),
         quality_score=float(result.get("quality_score", 0.0)),
         latency_ms=result.get("latency_ms", 0),
@@ -1019,11 +1166,14 @@ async def search(req: SearchRequest, request: Request,
 # ---------------------------------------------------------------------------
 
 @app.post("/api/ingest", response_model=IngestResponse, tags=["Ingestion"])
-async def ingest(req: IngestRequest):
+async def ingest(req: IngestRequest, request: Request,
+                 api_key: str = Security(_api_key_header)):
     """
     Trigger the full Ultra RAG ingestion pipeline for a collection.
     Long-running — consider running via CLI for large corpora.
+    Requires global admin API key.
     """
+    _check_api_key(request, api_key)
     def _run_ingest() -> IngestResponse:
         from ultra_ingest import (  # noqa: PLC0415
             ALL_STAGES, LLM_STAGES,
@@ -1071,6 +1221,14 @@ async def ingest(req: IngestRequest):
     except Exception as exc:
         log.error("/api/ingest failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+    # Invalidate semantic cache for this collection — new docs change answers
+    try:
+        from src.semantic_cache import SemanticCache  # noqa: PLC0415
+        SemanticCache().invalidate_collection(req.collection)
+    except Exception:
+        pass
+
     return response
 
 
@@ -1268,6 +1426,122 @@ async def eval_endpoint(req: EvalRequest):
         log.error("/api/eval failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
     return result
+
+
+# ---------------------------------------------------------------------------
+# /api/search/stream — Server-Sent Events streaming endpoint
+# ---------------------------------------------------------------------------
+
+@app.post("/api/search/stream", tags=["Retrieval"])
+async def search_stream(req: SearchRequest, request: Request,
+                        api_key: str = Security(_api_key_header)):
+    """
+    Streaming version of /api/search using Server-Sent Events (SSE).
+
+    Phase 1 (retrieval) runs synchronously in the thread pool.
+    Phase 2 (synthesis) streams tokens directly from Ollama.
+
+    SSE event types:
+      data: {"status": "retrieving"}       — retrieval started
+      data: {"status": "generating"}       — streaming LLM output started
+      data: {"token": "<text>"}            — one token / chunk from the LLM
+      data: {"done": true, "sources": [...], "strategy": "hybrid"}  — final event
+      data: {"error": "<msg>"}             — error event
+
+    Example curl:
+      curl -N -X POST http://localhost:8300/api/search/stream \\
+           -H "Content-Type: application/json" \\
+           -d '{"query": "What is RAPTOR?", "collection": "personal"}'
+    """
+    _check_collection_access(req.collection, request, api_key)
+
+    from src.prompt_guard import check_query  # noqa: PLC0415
+    query_ok, reason = check_query(req.query)
+    if not query_ok:
+        raise HTTPException(status_code=400, detail=f"Query rejected: {reason}")
+
+    def _retrieve():
+        from src.search import search  # noqa: PLC0415
+        conn = _get_scoped_conn(req.collection)
+        return search(conn, req.query, req.collection, top_k=req.top_k or 5)
+
+    async def _event_stream():
+        import json as _j
+        try:
+            yield 'data: {"status":"retrieving"}\n\n'
+            chunks = await asyncio.to_thread(_retrieve)
+
+            if not chunks:
+                yield f'data: {_j.dumps({"token": "No relevant context found for your query."})}\n\n'
+                yield f'data: {_j.dumps({"done": True, "sources": [], "strategy": "hybrid"})}\n\n'
+                return
+
+            # Build context block from top-5 chunks
+            context_parts = []
+            for i, c in enumerate(chunks[:5]):
+                prefix = (c.get("context_prefix") or "").strip()
+                body = (c.get("content") or "").strip()
+                context_parts.append(f"[{i + 1}] {(prefix + chr(10)) if prefix else ''}{body}")
+            context = "\n\n---\n\n".join(context_parts)
+
+            prompt = (
+                "Answer the question accurately using only the provided context. "
+                "Cite source numbers like [1] where relevant. Be concise.\n\n"
+                f"Context:\n{context}\n\nQuestion: {req.query}"
+            )
+
+            from src.config import get_config  # noqa: PLC0415
+            cfg = get_config()
+            llm_cfg = cfg.get("llm", {})
+            ollama_url = llm_cfg.get("ollama_url", "http://localhost:11434").rstrip("/")
+            model = llm_cfg.get("model", "qwen2.5:7b")
+
+            yield 'data: {"status":"generating"}\n\n'
+
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": True,
+                "options": {"num_predict": 1500, "num_ctx": 4096},
+            }
+
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                async with client.stream("POST", f"{ollama_url}/api/generate", json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk_data = _j.loads(line)
+                            token = chunk_data.get("response", "")
+                            if token:
+                                yield f"data: {_j.dumps({'token': token})}\n\n"
+                            if chunk_data.get("done"):
+                                break
+                        except _j.JSONDecodeError:
+                            continue
+
+            sources = [
+                {
+                    "id": c.get("id"),
+                    "content": (c.get("content") or "")[:200],
+                    "score": round(float(c.get("score") or 0), 4),
+                }
+                for c in chunks[:5]
+            ]
+            RAG_STRATEGY_COUNTER.labels(strategy="hybrid_stream").inc()
+            yield f'data: {_j.dumps({"done": True, "strategy": "hybrid", "sources": sources})}\n\n'
+
+        except Exception as exc:
+            log.error("/api/search/stream error: %s", exc, exc_info=True)
+            import json as _j2  # noqa
+            yield f'data: {_j2.dumps({"error": str(exc)})}\n\n'
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ---------------------------------------------------------------------------
