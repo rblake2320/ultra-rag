@@ -13,7 +13,8 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+import time
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -25,6 +26,31 @@ log = logging.getLogger(__name__)
 _JSON_FENCE_RE = re.compile(
     r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE
 )
+
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _with_backoff(fn: Callable[[], Any], *, attempts: int = 3, base: float = 1.0, cap: float = 30.0) -> Any:
+    """Call fn() up to `attempts` times; retry transient / rate-limit errors with exponential backoff."""
+    delay = base
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt == attempts - 1:
+                raise
+            msg = str(exc).lower()
+            retryable = (
+                any(str(s) in msg for s in _RETRY_STATUSES)
+                or "connection" in msg
+                or "timeout" in msg
+                or "rate" in msg
+            )
+            if not retryable:
+                raise
+            log.warning("LLM transient error (attempt %d/%d): %s — retry in %.1fs", attempt + 1, attempts, exc, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, cap)
 
 # Default models by task profile
 _DEFAULT_EXTRACTION_MODEL = "qwen2.5-coder:32b"  # high-quality reasoning
@@ -249,30 +275,29 @@ class LLMClient:
         max_tokens: int,
         json_mode: bool = False,
     ) -> str:
-        """POST to Ollama /api/generate (non-streaming)."""
+        """POST to Ollama /api/generate (non-streaming) with exponential-backoff retry."""
         payload: dict = {
             "model":  self.model,
             "prompt": prompt,
             "stream": False,
             "options": {
                 "num_predict": max_tokens,
-                "num_ctx":     4096,  # ensure sufficient context window
+                "num_ctx":     4096,
             },
         }
         if system:
             payload["system"] = system
 
-        resp = httpx.post(
-            f"{self.ollama_url}/api/generate",
-            json=payload,
-            timeout=180.0,  # longer for large models
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        def _call() -> str:
+            resp = httpx.post(
+                f"{self.ollama_url}/api/generate",
+                json=payload,
+                timeout=180.0,
+            )
+            resp.raise_for_status()
+            return resp.json().get("response", "").strip()
 
-        # Ollama returns {"response": "...", "done": true, ...}
-        text = data.get("response", "")
-        return text.strip()
+        return _with_backoff(_call)
 
     def _claude_complete(
         self,
@@ -315,6 +340,8 @@ class LLMClient:
         if system:
             kwargs["system"] = system
 
-        message = self._claude_client.messages.create(**kwargs)
-        text = message.content[0].text if message.content else ""
-        return text.strip()
+        def _call() -> str:
+            message = self._claude_client.messages.create(**kwargs)
+            return message.content[0].text.strip() if message.content else ""
+
+        return _with_backoff(_call)

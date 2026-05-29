@@ -1,7 +1,6 @@
 """
 Hybrid search: pgvector cosine + tsvector full-text → RRF fusion → NIM re-ranker.
 """
-import hashlib
 import logging
 from functools import lru_cache
 from typing import Optional
@@ -25,8 +24,12 @@ def _cached_embed_ollama(query: str, model: str, ollama_url: str) -> tuple:
     return tuple(emb[0]) if emb else ()
 
 
-# Simple dict cache for local-provider embeddings (avoids repeated GPU calls)
-_local_embed_cache: dict = {}
+@lru_cache(maxsize=512)
+def _cached_embed_local(query: str, model: str) -> tuple:
+    """Embed via local model with is_query=True, caching by (query, model) key."""
+    from .embedder import _embed_batch_local  # noqa: PLC0415
+    emb = _embed_batch_local([query], model, batch_size=1, is_query=True)
+    return tuple(emb[0]) if emb else ()
 
 
 def _get_query_embedding(query: str) -> list:
@@ -36,12 +39,8 @@ def _get_query_embedding(query: str) -> list:
     model    = cfg_emb["model"]
 
     if provider == "local":
-        key = (query.strip(), model)
-        if key not in _local_embed_cache:
-            from .embedder import _embed_batch_local  # noqa: PLC0415
-            emb = _embed_batch_local([query.strip()], model, batch_size=1)
-            _local_embed_cache[key] = emb[0] if emb else []
-        return list(_local_embed_cache[key])
+        result = _cached_embed_local(query.strip(), model)
+        return list(result) if result else []
     else:
         result = _cached_embed_ollama(
             query.strip(), model, cfg_emb.get("ollama_url", "http://localhost:11434")
@@ -93,7 +92,6 @@ def search(conn, query: str, collection: str,
 
     # ── Keyword search (tsvector) ─────────────────────────────────────
     def _keyword_search() -> list:
-        query_tsq = " | ".join(query.split())  # simple OR of words
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT id, content, content_type, context_prefix,

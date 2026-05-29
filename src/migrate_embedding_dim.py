@@ -46,14 +46,16 @@ log = logging.getLogger(__name__)
 # Tables and their vector columns + HNSW index names
 # ---------------------------------------------------------------------------
 
-# (table, column, old_dim, new_dim, hnsw_index_name)
+# (table, column, old_dim, new_dim, canonical_hnsw_index_name)
+# new_dim = 1024: NV-Embed-v2 MRL truncation — fits pgvector HNSW ≤2000-dim limit.
+# (pgvector 0.8.0 HNSW max is 2000 for vector type; 4096 would exceed this.)
 _TARGETS = [
-    ("rag.chunks",               "embedding",      768, 4096, "idx_chunks_embedding"),
-    ("rag.entities",             "embedding",      768, 4096, "idx_entities_embedding"),
-    ("rag.contextual_contexts",  "embedding",      768, 4096, "idx_contextual_embedding"),
-    ("rag.communities",          "embedding",      768, 4096, "idx_communities_embedding"),
-    ("rag.summaries",            "embedding",      768, 4096, "idx_summaries_embedding"),
-    ("rag.parent_chunks",        "embedding",      768, 4096, "idx_parent_chunks_embedding"),
+    ("rag.chunks",               "embedding",      768, 1024, "idx_chunks_embedding"),
+    ("rag.entities",             "embedding",      768, 1024, "idx_entities_embedding"),
+    ("rag.contextual_contexts",  "embedding",      768, 1024, "idx_contextual_embedding"),
+    ("rag.communities",          "embedding",      768, 1024, "idx_communities_embedding"),
+    ("rag.summaries",            "embedding",      768, 1024, "idx_summaries_embedding"),
+    ("rag.parent_chunks",        "embedding",      768, 1024, "idx_parent_chunks_embedding"),
 ]
 
 # ef_construction / m values for HNSW rebuild
@@ -96,10 +98,31 @@ def _index_exists(conn, index_name: str) -> bool:
         return cur.fetchone()[0]
 
 
+def _get_vector_indexes(conn, table: str, col: str) -> list:
+    """Return list of (indexname,) for ALL vector-type indexes on table.col."""
+    schema, tname = (table.split(".", 1) + [""])[:2]
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT i.relname AS indexname
+            FROM   pg_index ix
+            JOIN   pg_class  i  ON i.oid = ix.indexrelid
+            JOIN   pg_class  t  ON t.oid = ix.indrelid
+            JOIN   pg_am     am ON am.oid = i.relam
+            JOIN   pg_namespace n ON n.oid = t.relnamespace
+            JOIN   pg_attribute  a  ON a.attrelid = t.oid
+                                    AND a.attnum = ANY(ix.indkey)
+            WHERE  n.nspname   = %s
+              AND  t.relname   = %s
+              AND  a.attname   = %s
+              AND  am.amname   IN ('hnsw', 'ivfflat')
+        """, (schema, tname, col))
+        return [row[0] for row in cur.fetchall()]
+
+
 def _run_migration(conn, new_dim: int, dry_run: bool) -> None:
     """Upgrade all vector columns to new_dim and rebuild HNSW indexes."""
     log.info("=" * 65)
-    log.info("Embedding dimension migration: 768 → %d", new_dim)
+    log.info("Embedding dimension migration → %d", new_dim)
     log.info("Dry run: %s", dry_run)
     log.info("=" * 65)
 
@@ -113,16 +136,23 @@ def _run_migration(conn, new_dim: int, dry_run: bool) -> None:
 
         log.info("Processing %s.%s ...", table, col)
 
-        # 1. Drop existing HNSW index (can't alter in-place)
-        if _index_exists(conn, idx_name):
-            sql_drop = f"DROP INDEX IF EXISTS {idx_name};"
-            log.info("  DROP INDEX %s", idx_name)
+        # 1. Drop ALL existing vector indexes (hnsw/ivfflat) — not just the canonical one.
+        #    Stale extra indexes (e.g. rag_chunks_emb) would block the ALTER otherwise.
+        all_vec_idxs = _get_vector_indexes(conn, table, col) if not dry_run else (
+            [idx_name] if _index_exists(conn, idx_name) else []
+        )
+        if not all_vec_idxs and _index_exists(conn, idx_name):
+            all_vec_idxs = [idx_name]  # fallback for dry-run display
+
+        for drop_idx in all_vec_idxs:
+            sql_drop = f"DROP INDEX IF EXISTS {drop_idx};"
+            log.info("  DROP INDEX %s", drop_idx)
             if not dry_run:
                 with conn.cursor() as cur:
                     cur.execute(sql_drop)
                 conn.commit()
-        else:
-            log.info("  (index %s not found, skipping drop)", idx_name)
+        if not all_vec_idxs:
+            log.info("  (no vector indexes found on %s.%s)", table, col)
 
         # 2. ALTER column type
         sql_alter = (
@@ -144,13 +174,13 @@ def _run_migration(conn, new_dim: int, dry_run: bool) -> None:
                 cur.execute(sql_null)
             conn.commit()
 
-        # 4. Rebuild HNSW index
+        # 4. Rebuild HNSW index (IF NOT EXISTS: ALTER may auto-update existing index)
         sql_idx = (
-            f"CREATE INDEX {idx_name} ON {table} "
+            f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} "
             f"USING hnsw ({col} vector_cosine_ops) "
             f"WITH (m = {_HNSW_M}, ef_construction = {_HNSW_EF_CONSTRUCTION});"
         )
-        log.info("  CREATE HNSW INDEX %s", idx_name)
+        log.info("  CREATE HNSW INDEX %s (IF NOT EXISTS)", idx_name)
         if not dry_run:
             with conn.cursor() as cur:
                 cur.execute(sql_idx)
@@ -183,8 +213,12 @@ def _run_rollback(conn, old_dim: int, dry_run: bool) -> None:
 
         log.info("Rolling back %s.%s ...", table, col)
 
-        if _index_exists(conn, idx_name):
-            sql = f"DROP INDEX IF EXISTS {idx_name};"
+        # Drop ALL vector indexes (not just the canonical one)
+        all_vec_idxs = _get_vector_indexes(conn, table, col) if not dry_run else (
+            [idx_name] if _index_exists(conn, idx_name) else []
+        )
+        for drop_idx in all_vec_idxs:
+            sql = f"DROP INDEX IF EXISTS {drop_idx};"
             if not dry_run:
                 with conn.cursor() as cur:
                     cur.execute(sql)
@@ -245,8 +279,8 @@ def main() -> int:
     parser.add_argument(
         "--new-dim",
         type=int,
-        default=4096,
-        help="Target vector dimension (default: 4096 for NV-Embed-v2)",
+        default=1024,
+        help="Target vector dimension (default: 1024 for NV-Embed-v2 MRL)",
     )
     parser.add_argument(
         "--old-dim",
