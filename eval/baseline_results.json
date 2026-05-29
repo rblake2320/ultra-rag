@@ -1,0 +1,40 @@
+[
+  {
+    "timestamp": "2026-03-20T07:14:22.868339",
+    "run_name": "baseline-nomic-768",
+    "collection": "imds",
+    "scores": {
+      "faithfulness": 0.3732,
+      "answer_relevancy": 0.6392,
+      "context_precision": 0.3502,
+      "context_recall": 0.499,
+      "n_questions": 41,
+      "run_name": "baseline-nomic-768",
+      "run_id": 1
+    },
+    "thresholds": {
+      "context_recall": 0.6,
+      "faithfulness": 0.7
+    },
+    "passed": false
+  },
+  {
+    "timestamp": "2026-03-20T11:00:54.024277",
+    "run_name": "nv-embed-v2",
+    "collection": "imds",
+    "scores": {
+      "faithfulness": 0.4561,
+      "answer_relevancy": 0.4532,
+      "context_precision": 0.6024,
+      "context_recall": 0.6636,
+      "n_questions": 41,
+      "run_name": "nv-embed-v2",
+      "run_id": 2
+    },
+    "thresholds": {
+      "context_recall": 0.6,
+      "faithfulness": 0.7
+    },
+    "passed": false
+  }
+]
