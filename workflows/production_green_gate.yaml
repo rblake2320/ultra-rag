@@ -1,0 +1,80 @@
+id: production_green_gate
+title: Production green gate durable workflow
+version: "1"
+steps:
+  - id: architecture_audit
+    name: Architecture audit
+    kind: command
+    command: ["{python}", "ultra_arch_audit.py", "--json"]
+    timeout_seconds: 120
+    retries: 1
+    retry_backoff_seconds: 1
+    idempotency_key: production_green_gate:architecture_audit:v1
+
+  - id: retrieval_eval
+    name: Retrieval fixture eval
+    kind: command
+    command:
+      - "{python}"
+      - "ultra_retrieval_eval.py"
+      - "--golden"
+      - "eval/golden_retrieval.jsonl"
+      - "--fixture-results"
+      - "eval/fixture_results.json"
+      - "--json"
+    timeout_seconds: 120
+    retries: 1
+    retry_backoff_seconds: 1
+    idempotency_key: production_green_gate:retrieval_eval:v1
+
+  - id: product_smoke
+    name: Product smoke
+    kind: command
+    command: ["{python}", "ultra_product_smoke.py", "--json"]
+    timeout_seconds: 120
+    retries: 1
+    retry_backoff_seconds: 1
+    idempotency_key: production_green_gate:product_smoke:v1
+
+  - id: benchmark_evidence
+    name: Evidence benchmark
+    kind: command
+    command: ["{python}", "ultra_benchmark.py", "--json"]
+    timeout_seconds: 120
+    retries: 1
+    retry_backoff_seconds: 1
+    idempotency_key: production_green_gate:benchmark_evidence:v1
+
+  - id: unit_tests
+    name: Unit tests
+    kind: command
+    command: ["{python}", "-m", "pytest", "-q"]
+    timeout_seconds: 600
+    retries: 0
+    idempotency_key: production_green_gate:unit_tests:v1
+
+  - id: compile
+    name: Compile sources
+    kind: command
+    command:
+      - "{python}"
+      - "-m"
+      - "compileall"
+      - "src"
+      - "ingest.py"
+      - "query.py"
+      - "ultra_ingest.py"
+      - "ultra_query.py"
+      - "ultra_eval.py"
+      - "ultra_server.py"
+      - "ultra_code_graph.py"
+      - "ultra_retrieval_eval.py"
+      - "ultra_check.py"
+      - "ultra_benchmark.py"
+      - "ultra_playbooks.py"
+      - "ultra_product_smoke.py"
+      - "ultra_arch_audit.py"
+      - "ultra_agent_run.py"
+    timeout_seconds: 180
+    retries: 0
+    idempotency_key: production_green_gate:compile:v1

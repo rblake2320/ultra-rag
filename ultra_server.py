@@ -8,7 +8,7 @@ synthetic evaluation.
 
 Endpoints:
   POST /api/search       — Ultra search with all strategies
-  POST /api/ingest       — Trigger full 7-stage pipeline
+  POST /api/ingest       — Trigger full 8-stage pipeline
   GET  /api/entities     — Browse knowledge graph entities
   GET  /api/communities  — Browse detected communities
   GET  /api/provenance/{id} — Drill-down confidence decomposition
@@ -23,8 +23,11 @@ Run:
 import asyncio
 import json
 import logging
+import os
+import secrets
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,8 +52,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 # ── FastAPI imports ───────────────────────────────────────────────────────────
 try:
     import uvicorn
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel, Field
 except ImportError as exc:
     print(f"ERROR: FastAPI/uvicorn not installed. Run: pip install fastapi uvicorn")
@@ -92,6 +96,20 @@ class SearchResponse(BaseModel):
     latency_ms:         int
     provenance_chain_id: Optional[int]  = None
     classification:     Optional[Dict]  = None
+    trace:              Optional[Dict]  = None
+
+
+class ChatResponse(BaseModel):
+    answer:             str
+    sources:            List[ResultItem]
+    strategy_used:      str
+    quality_score:      float
+    latency_ms:         int
+    trace:              Optional[Dict] = None
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
 
 
 class IngestRequest(BaseModel):
@@ -157,20 +175,65 @@ class StatsResponse(BaseModel):
 # App setup
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("Ultra RAG Server starting up...")
+    try:
+        conn = _get_conn()
+        await asyncio.to_thread(_ensure_schemas, conn)
+        log.info("Schemas ready.")
+    except Exception as exc:
+        if os.environ.get("ULTRARAG_STRICT_STARTUP", "").lower() in {"1", "true", "yes"}:
+            raise
+        log.warning("Startup dependency check failed; serving degraded API: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="Ultra RAG API",
-    description="7-stage RAG pipeline with KG, RAPTOR, CRAG, and RAGAS evaluation",
+    description="8-stage RAG pipeline with deterministic code graph extraction, KG, RAPTOR, CRAG, and RAGAS evaluation",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
+
+def _csv_env(name: str, default: str) -> list[str]:
+    values = os.environ.get(name, default)
+    return [v.strip() for v in values.split(",") if v.strip()]
+
+
+_cors_origins = _csv_env(
+    "ULTRARAG_CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://localhost:8300",
+)
+_api_key = os.environ.get("ULTRARAG_API_KEY", "")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    if not _api_key:
+        return await call_next(request)
+
+    public_paths = {"/app", "/dashboard", "/api/health", "/api/live", "/api/ready", "/docs", "/redoc", "/openapi.json"}
+    if request.url.path in public_paths:
+        return await call_next(request)
+
+    supplied = request.headers.get("x-api-key", "")
+    if not secrets.compare_digest(supplied, _api_key):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key"},
+        )
+
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -197,14 +260,6 @@ def _get_conn():
 # ---------------------------------------------------------------------------
 # Startup / shutdown
 # ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def startup_event():
-    log.info("Ultra RAG Server starting up…")
-    conn = _get_conn()
-    await asyncio.to_thread(_ensure_schemas, conn)
-    log.info("Schemas ready.")
-
 
 def _ensure_schemas(conn) -> None:
     from src.db       import create_schema        # noqa: PLC0415
@@ -262,6 +317,21 @@ async def health():
         pgvector=pgvector_status,
         timestamp=datetime.utcnow().isoformat(),
     )
+
+
+@app.get("/api/live", tags=["System"])
+async def live():
+    """Process liveness probe for orchestrators."""
+    return {"status": "ok"}
+
+
+@app.get("/api/ready", response_model=HealthResponse, tags=["System"])
+async def ready():
+    """Readiness probe that requires DB, pgvector data path, and Ollama reachability."""
+    response = await health()
+    if response.status != "ok":
+        raise HTTPException(status_code=503, detail=response.model_dump())
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +420,227 @@ async def search(req: SearchRequest):
         latency_ms=result.get("latency_ms", 0),
         provenance_chain_id=result.get("provenance_chain_id") if req.include_provenance else None,
         classification=result.get("classification") if req.include_provenance else None,
+        trace=result.get("trace") if req.include_provenance else None,
     )
+
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["System"])
+async def dashboard():
+    """Serve the built-in operations dashboard."""
+    dashboard_path = Path(__file__).parent / "static" / "dashboard.html"
+    return HTMLResponse(dashboard_path.read_text(encoding="utf-8"))
+
+
+@app.get("/app", response_class=HTMLResponse, tags=["Product"])
+async def product_app():
+    """Serve the consumer-facing Ultra RAG workspace app."""
+    app_path = Path(__file__).parent / "static" / "app.html"
+    return HTMLResponse(app_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/collections", tags=["Product"])
+async def list_collections():
+    """List configured and uploaded workspaces/collections."""
+    def _fetch() -> dict:
+        from src.config import get_config  # noqa: PLC0415
+        from src.product import DOCUMENTS_ROOT, safe_collection_name  # noqa: PLC0415
+
+        names = set(get_config().get("collections", {}).keys())
+        if DOCUMENTS_ROOT.exists():
+            for child in DOCUMENTS_ROOT.iterdir():
+                if child.is_dir():
+                    names.add(safe_collection_name(child.name))
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT collection FROM rag.documents ORDER BY collection")
+                names.update(row[0] for row in cur.fetchall())
+        except Exception:
+            pass
+        names.add("default")
+        return {"collections": [{"name": name} for name in sorted(names)]}
+
+    return await asyncio.to_thread(_fetch)
+
+
+@app.post("/api/collections", tags=["Product"])
+async def create_collection(req: CollectionCreateRequest):
+    """Create an upload-backed workspace directory."""
+    from src.product import collection_upload_dir, safe_collection_name  # noqa: PLC0415
+
+    name = safe_collection_name(req.name)
+    path = collection_upload_dir(name)
+    return {"name": name, "path": str(path)}
+
+
+@app.get("/api/documents", tags=["Product"])
+async def list_documents(
+    collection: str = Query("default", description="Collection name"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """List indexed documents for a collection."""
+    def _fetch() -> dict:
+        import psycopg2.extras  # noqa: PLC0415
+        conn = _get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, file_name, file_type, file_size, chunk_count, ingested_at
+                FROM rag.documents
+                WHERE collection = %s
+                ORDER BY ingested_at DESC
+                LIMIT %s
+                """,
+                (collection, limit),
+            )
+            return {"documents": [dict(row) for row in cur.fetchall()]}
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/upload", tags=["Product"])
+async def upload_documents(
+    collection: str = Query("default", description="Collection name"),
+    ingest: bool = Query(True, description="Parse/chunk after upload"),
+    embed: bool = Query(False, description="Embed collection after upload"),
+    files: List[UploadFile] = File(...),
+):
+    """Upload documents into a workspace and optionally ingest/embed them."""
+    def _save_and_ingest() -> dict:
+        from ingest import ingest_file  # noqa: PLC0415
+        from src.embedder import embed_collection  # noqa: PLC0415
+        from src.product import (  # noqa: PLC0415
+            collection_upload_dir,
+            is_supported_upload,
+            safe_collection_name,
+            safe_upload_name,
+        )
+
+        safe_collection = safe_collection_name(collection)
+        upload_dir = collection_upload_dir(safe_collection)
+        conn = _get_conn()
+        uploaded = []
+        rejected = []
+        ingested = []
+
+        for file in files:
+            filename = safe_upload_name(file.filename or "upload")
+            if not is_supported_upload(filename):
+                rejected.append({"file_name": filename, "reason": "unsupported file type"})
+                continue
+            target = upload_dir / filename
+            content = file.file.read()
+            target.write_bytes(content)
+            uploaded.append({"file_name": filename, "bytes": len(content)})
+            if ingest:
+                ingested.append(ingest_file(target, conn, safe_collection, force=True))
+
+        embedded = 0
+        if embed and uploaded:
+            embedded = embed_collection(conn, safe_collection)
+        return {
+            "collection": safe_collection,
+            "uploaded": uploaded,
+            "rejected": rejected,
+            "ingested": ingested,
+            "embedded_chunks": embedded,
+        }
+
+    try:
+        return await asyncio.to_thread(_save_and_ingest)
+    except Exception as exc:
+        log.error("/api/upload failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/chat", response_model=ChatResponse, tags=["Product"])
+async def chat(req: SearchRequest):
+    """Run retrieval and return an extractive, source-cited answer."""
+    def _run() -> dict:
+        from src.product import extractive_answer  # noqa: PLC0415
+        from ultra_query import run_ultra_query  # noqa: PLC0415
+
+        result = run_ultra_query(
+            _get_conn(),
+            query=req.query,
+            collection=req.collection,
+            top_k=req.top_k,
+            strategy_override=req.strategy,
+            no_rerank=req.no_rerank,
+            no_crag=req.no_crag,
+        )
+        result["answer"] = extractive_answer(req.query, result.get("results", []))
+        return result
+
+    try:
+        result = await asyncio.to_thread(_run)
+    except Exception as exc:
+        log.error("/api/chat failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    sources = [
+        ResultItem(
+            id=r.get("id"),
+            content=r.get("content", ""),
+            content_type=r.get("content_type", "text"),
+            score=float(r.get("score", 0.0)),
+            context_prefix=r.get("context_prefix"),
+            chunk_metadata=r.get("chunk_metadata"),
+            parent_content=r.get("parent_content") if req.include_parent else None,
+            rerank_score=r.get("rerank_score"),
+            utility_score=r.get("utility_score"),
+            provenance_components=r.get("provenance_components") if req.include_provenance else None,
+        )
+        for r in result.get("results", [])
+    ]
+    return ChatResponse(
+        answer=result["answer"],
+        sources=sources,
+        strategy_used=result.get("strategy_used", "hybrid"),
+        quality_score=float(result.get("quality_score", 0.0)),
+        latency_ms=result.get("latency_ms", 0),
+        trace=result.get("trace") if req.include_provenance else None,
+    )
+
+
+@app.get("/api/playbooks/recommend", tags=["Product"])
+async def recommend_playbooks_endpoint(
+    query: str = Query(..., min_length=1),
+    limit: int = Query(3, ge=1, le=10),
+):
+    """Recommend reusable agent playbooks for the current task."""
+    def _fetch() -> dict:
+        from src.agent_playbooks import load_playbooks, recommend_playbooks  # noqa: PLC0415
+        from src.config import get_config  # noqa: PLC0415
+        root = Path(__file__).parent
+        settings = get_config().get("agent_playbooks", {})
+        directory = Path(settings.get("dir", "playbooks"))
+        if not directory.is_absolute():
+            directory = root / directory
+        playbooks = load_playbooks(directory)
+        allowed_tools = set(settings.get("allowed_tools", []))
+        return {"playbooks": recommend_playbooks(query, playbooks, allowed_tools, limit=limit)}
+
+    return await asyncio.to_thread(_fetch)
+
+
+@app.get("/api/observability/summary", tags=["System"])
+async def observability_summary(
+    collection: str = Query("default", description="Collection name"),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Return query-log telemetry for dashboard and release checks."""
+    def _fetch() -> dict:
+        from src.observability import recent_query_summary  # noqa: PLC0415
+        return recent_query_summary(_get_conn(), collection=collection, limit=limit)
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +655,9 @@ async def ingest(req: IngestRequest):
     """
     def _run_ingest() -> IngestResponse:
         from ultra_ingest import (  # noqa: PLC0415
-            ALL_STAGES, LLM_STAGES,
+            ALL_STAGES,
             _parse_stages, _run_parse, _run_embed,
-            _run_contextual, _run_parents, _run_kg,
+            _run_code_graph, _run_contextual, _run_parents, _run_kg,
             _run_communities, _run_raptor,
         )
         conn = _get_conn()
@@ -379,6 +669,7 @@ async def ingest(req: IngestRequest):
         dispatch = {
             "parse":       lambda: _run_parse(req.collection, conn),
             "embed":       lambda: _run_embed(req.collection, conn),
+            "code_graph":  lambda: _run_code_graph(req.collection, conn),
             "contextual":  lambda: _run_contextual(req.collection, conn, req.reprocess),
             "parents":     lambda: _run_parents(req.collection, conn),
             "kg":          lambda: _run_kg(req.collection, conn),

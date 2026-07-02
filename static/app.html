@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ultra RAG</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --line: #d5dce5;
+      --text: #182230;
+      --muted: #667085;
+      --accent: #0f766e;
+      --accent-2: #1d4ed8;
+      --danger: #b42318;
+      --soft: #eef4ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .shell { display: grid; grid-template-columns: 280px 1fr 360px; min-height: 100vh; }
+    aside, main, .rail { min-width: 0; }
+    aside {
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      padding: 16px;
+    }
+    .rail {
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      padding: 16px;
+      overflow: auto;
+    }
+    main { display: flex; flex-direction: column; min-height: 100vh; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1, h2, h3 { margin: 0; }
+    h1 { font-size: 18px; }
+    h2 { font-size: 14px; margin-bottom: 10px; }
+    h3 { font-size: 13px; margin: 14px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    input, select, textarea, button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      padding: 9px 10px;
+      font: inherit;
+    }
+    button {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      cursor: pointer;
+      font-weight: 650;
+    }
+    button.secondary { background: #fff; color: var(--text); border-color: var(--line); }
+    button.blue { background: var(--accent-2); border-color: var(--accent-2); }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .stack { display: grid; gap: 10px; }
+    .muted { color: var(--muted); }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .metric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+    .metric strong { display: block; font-size: 20px; margin-top: 4px; }
+    .chat { flex: 1; overflow: auto; padding: 18px; display: grid; align-content: start; gap: 12px; }
+    .msg {
+      max-width: 860px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+    .msg.user { justify-self: end; background: var(--soft); }
+    .composer {
+      padding: 14px 18px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: 1fr 120px;
+      gap: 10px;
+    }
+    .source {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      margin-top: 8px;
+      white-space: normal;
+    }
+    .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #eef2f6; color: var(--muted); font-size: 12px; }
+    .list { display: grid; gap: 8px; }
+    .item { border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: #fff; overflow-wrap: anywhere; }
+    @media (max-width: 1120px) { .shell { grid-template-columns: 240px 1fr; } .rail { display: none; } }
+    @media (max-width: 720px) { .shell { display: block; } main { min-height: 70vh; } .composer { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="stack">
+        <h1>Ultra RAG</h1>
+        <label>
+          <span class="muted">Workspace</span>
+          <select id="collection"></select>
+        </label>
+        <div class="row">
+          <input id="newCollection" placeholder="new-workspace">
+          <button class="secondary" id="createCollection">Create</button>
+        </div>
+        <h3>Upload</h3>
+        <input id="file" type="file" multiple>
+        <button id="upload">Upload + ingest</button>
+        <button class="secondary" id="ingest">Run full ingest</button>
+        <h3>Status</h3>
+        <div class="metric-grid">
+          <div class="metric">Docs<strong id="docsCount">0</strong></div>
+          <div class="metric">Chunks<strong id="chunksCount">0</strong></div>
+          <div class="metric">Entities<strong id="entitiesCount">0</strong></div>
+          <div class="metric">Quality<strong id="quality">0</strong></div>
+        </div>
+        <div id="health" class="item muted">checking health...</div>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <h1 id="title">Chat with your workspace</h1>
+          <div class="muted">Source-cited retrieval, provenance, traces, and local-first indexing.</div>
+        </div>
+        <button class="secondary" id="refresh">Refresh</button>
+      </header>
+      <section id="chat" class="chat"></section>
+      <section class="composer">
+        <textarea id="query" rows="2" placeholder="Ask about your documents..."></textarea>
+        <button class="blue" id="send">Ask</button>
+      </section>
+    </main>
+    <section class="rail">
+      <h2>Documents</h2>
+      <div id="documents" class="list"></div>
+      <h3>Recent Queries</h3>
+      <div id="recent" class="list"></div>
+      <h3>Playbooks</h3>
+      <div id="playbooks" class="list"></div>
+    </section>
+  </div>
+  <script>
+    const $ = id => document.getElementById(id);
+    const state = { collection: "default" };
+
+    async function api(path, options) {
+      const res = await fetch(path, options);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function addMsg(text, who = "assistant", sources = []) {
+      const div = document.createElement("div");
+      div.className = `msg ${who}`;
+      div.innerHTML = esc(text);
+      if (sources.length) {
+        div.innerHTML += sources.map((s, i) => `<div class="source"><span class="pill">source ${i + 1}</span> ${esc(s.context_prefix || s.content_type || "source")}<br>${esc((s.content || "").slice(0, 260))}</div>`).join("");
+      }
+      $("chat").appendChild(div);
+      $("chat").scrollTop = $("chat").scrollHeight;
+    }
+    async function loadCollections() {
+      const data = await api("/api/collections");
+      $("collection").innerHTML = data.collections.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+      $("collection").value = state.collection;
+    }
+    async function refresh() {
+      await loadCollections();
+      state.collection = $("collection").value || "default";
+      $("title").textContent = `Chat with ${state.collection}`;
+      const [health, stats, docs, obs, playbooks] = await Promise.all([
+        api("/api/health").catch(e => ({status: "degraded", detail: String(e)})),
+        api(`/api/stats?collection=${encodeURIComponent(state.collection)}`).catch(() => ({})),
+        api(`/api/documents?collection=${encodeURIComponent(state.collection)}`).catch(() => ({documents: []})),
+        api(`/api/observability/summary?collection=${encodeURIComponent(state.collection)}`).catch(() => ({recent: [], avg_quality_score: 0})),
+        api(`/api/playbooks/recommend?query=${encodeURIComponent("launch readiness document chat")}`).catch(() => ({playbooks: []})),
+      ]);
+      $("health").textContent = `health: ${health.status}`;
+      $("docsCount").textContent = stats.documents ?? 0;
+      $("chunksCount").textContent = stats.chunks ?? 0;
+      $("entitiesCount").textContent = stats.entities ?? 0;
+      $("quality").textContent = obs.avg_quality_score ?? 0;
+      $("documents").innerHTML = docs.documents.map(d => `<div class="item"><strong>${esc(d.file_name)}</strong><br><span class="muted">${esc(d.file_type)} · ${d.chunk_count ?? 0} chunks</span></div>`).join("") || `<div class="item muted">No documents yet.</div>`;
+      $("recent").innerHTML = obs.recent.slice(0, 6).map(r => `<div class="item">${esc(r.query_text)}<br><span class="muted">${esc(r.strategy)} · ${r.latency_ms ?? 0} ms</span></div>`).join("") || `<div class="item muted">No recent queries.</div>`;
+      $("playbooks").innerHTML = playbooks.playbooks.map(p => `<div class="item"><strong>${esc(p.title)}</strong><br><span class="muted">${esc(p.summary)}</span></div>`).join("");
+    }
+    async function ask() {
+      const query = $("query").value.trim();
+      if (!query) return;
+      $("query").value = "";
+      addMsg(query, "user");
+      const payload = { query, collection: state.collection, top_k: 5, include_provenance: true, include_parent: false };
+      const data = await api("/api/chat", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload) });
+      addMsg(data.answer, "assistant", data.sources || []);
+      refresh();
+    }
+    async function upload() {
+      const files = [...$("file").files];
+      if (!files.length) return;
+      const form = new FormData();
+      files.forEach(file => form.append("files", file));
+      await api(`/api/upload?collection=${encodeURIComponent(state.collection)}&ingest=true&embed=true`, { method: "POST", body: form });
+      $("file").value = "";
+      await refresh();
+    }
+    $("collection").addEventListener("change", () => { state.collection = $("collection").value; refresh(); });
+    $("send").addEventListener("click", ask);
+    $("query").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask(); });
+    $("upload").addEventListener("click", upload);
+    $("refresh").addEventListener("click", refresh);
+    $("ingest").addEventListener("click", async () => { await api("/api/ingest", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({collection: state.collection, stages: "all"}) }); refresh(); });
+    $("createCollection").addEventListener("click", async () => {
+      const name = $("newCollection").value.trim();
+      if (!name) return;
+      await api("/api/collections", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name}) });
+      state.collection = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+      $("newCollection").value = "";
+      refresh();
+    });
+    refresh().then(() => addMsg("Upload documents, choose a workspace, then ask a question. Answers stay grounded in retrieved sources."));
+  </script>
+</body>
+</html>

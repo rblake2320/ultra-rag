@@ -23,24 +23,24 @@ collections:
   #   skip_files: []
 
 db:
-  host:     localhost
-  port:     5433
-  database: memoryweb
-  user:     memoryweb
-  password: "${RAG_DB_PASSWORD}"   # set in .env or shell environment
+  host:     "${RAG_DB_HOST:-localhost}"
+  port:     "${RAG_DB_PORT:-5433}"
+  database: "${RAG_DB_NAME:-memoryweb}"
+  user:     "${RAG_DB_USER:-memoryweb}"
+  password: "${RAG_DB_PASSWORD:-}"   # set in .env or shell environment
 
 embedding:
   model:      nomic-embed-text
   provider:   ollama
   dimensions: 768
-  ollama_url: "http://localhost:11434"
+  ollama_url: "${OLLAMA_URL:-http://localhost:11434}"
   batch_size: 4
 
 search:
   # Optional: NVIDIA NIM reranker (leave nvidia_api_key blank to skip)
   reranker_model:    nvidia/rerank-qa-mistral-4b
   reranker_endpoint: "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
-  nvidia_api_key:    "${NVIDIA_API_KEY}"
+  nvidia_api_key:    "${NVIDIA_API_KEY:-}"
   # Reciprocal Rank Fusion parameters
   rrf_k_vector:  60
   rrf_k_keyword: 40
@@ -49,7 +49,7 @@ llm:
   provider:    ollama
   model:       deepseek-r1:32b   # used for KG extraction, RAPTOR, communities
   fast_model:  gemma3:latest     # used for contextual retrieval, routing
-  ollama_url:  "http://localhost:11434"
+  ollama_url:  "${OLLAMA_URL:-http://localhost:11434}"
   # Optional: switch provider to "trtllm" when a TensorRT-LLM OpenAI-compatible
   # server is running. Speculative decoding is enabled in the trtllm-serve
   # process via configs/trtllm-speculative-ngram.yaml.
@@ -71,6 +71,9 @@ raptor:
 contextual:
   batch_size:          20
   max_doc_preview_chars: 3000
+
+code_graph:
+  output_dir: graph-out
 
 watcher:
   poll_interval:   60   # seconds between directory scans
@@ -95,3 +98,19 @@ adversarial:
   n_queries:             20
   blind_spot_threshold:  0.3
   schedule_hours:        24    # how often to run adversarial self-tests
+
+agent_playbooks:
+  dir: playbooks
+  allowed_tools:
+    - filesystem
+    - shell
+    - docker
+    - web
+    - git
+  masked_env:
+    - RAG_DB_PASSWORD
+    - ULTRARAG_API_KEY
+    - NVIDIA_API_KEY
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
+  max_catalog_items: 20

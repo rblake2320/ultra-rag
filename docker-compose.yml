@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${RAG_DB_NAME:-memoryweb}
+      POSTGRES_USER: ${RAG_DB_USER:-memoryweb}
+      POSTGRES_PASSWORD: ${RAG_DB_PASSWORD:-memoryweb}
+    ports:
+      - "${RAG_DB_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RAG_DB_USER:-memoryweb} -d ${RAG_DB_NAME:-memoryweb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RAG_DB_HOST: postgres
+      RAG_DB_PORT: 5432
+      RAG_DB_NAME: ${RAG_DB_NAME:-memoryweb}
+      RAG_DB_USER: ${RAG_DB_USER:-memoryweb}
+      RAG_DB_PASSWORD: ${RAG_DB_PASSWORD:-memoryweb}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      ULTRARAG_CORS_ORIGINS: ${ULTRARAG_CORS_ORIGINS:-http://localhost:3000,http://localhost:8300}
+      ULTRARAG_API_KEY: ${ULTRARAG_API_KEY:-}
+    ports:
+      - "${ULTRARAG_PORT:-8300}:8300"
+    volumes:
+      - ./documents:/app/documents
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8300/api/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

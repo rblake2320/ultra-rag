@@ -1,0 +1,24 @@
+{
+  "how do I build the deterministic code graph": [
+    {
+      "stable_id": "code_graph_cli",
+      "content": "ultra_code_graph.py builds portable graph artifacts for a collection."
+    },
+    {
+      "stable_id": "code_graph_module",
+      "content": "src/code_graph.py extracts Python and SQL entities and relationships."
+    }
+  ],
+  "what protects optional service configuration": [
+    {
+      "stable_id": "config_optional_env",
+      "content": "src/config.py supports ${VAR:-default} optional environment expansion."
+    }
+  ],
+  "how is retrieval quality measured": [
+    {
+      "stable_id": "retrieval_eval_metrics",
+      "content": "src/retrieval_eval.py computes precision@k, recall@k, MRR, and NDCG."
+    }
+  ]
+}

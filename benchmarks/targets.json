@@ -1,0 +1,75 @@
+{
+  "required_areas": [
+    "workspace UI loads",
+    "document upload is supported",
+    "source-cited chat is supported",
+    "retrieval quality is measured from golden queries",
+    "latency and query traces are observable",
+    "deployment config validates",
+    "competitor claims require measured evidence"
+  ],
+  "queries": [
+    {
+      "query": "how do I build the deterministic code graph",
+      "must_contain": ["code graph"]
+    },
+    {
+      "query": "how is retrieval quality measured",
+      "must_contain": ["retrieval", "quality"]
+    }
+  ],
+  "targets": [
+    {
+      "name": "Ultra RAG retrieval fixture",
+      "class": "local-first RAG app",
+      "enabled": true,
+      "kind": "command",
+      "command": [
+        "python",
+        "ultra_retrieval_eval.py",
+        "--golden",
+        "eval/golden_retrieval.jsonl",
+        "--fixture-results",
+        "eval/fixture_results.json",
+        "--json"
+      ],
+      "thresholds": {
+        "recall_at_k": 1.0,
+        "mrr": 1.0
+      },
+      "evidence": "deterministic local retrieval fixture"
+    },
+    {
+      "name": "AnythingLLM",
+      "class": "self-hosted document chat app",
+      "enabled": false,
+      "kind": "http_chat",
+      "endpoint": "",
+      "configure_hint": "Set enabled=true and endpoint to a real AnythingLLM workspace chat API before making comparison claims."
+    },
+    {
+      "name": "Dify",
+      "class": "AI app / knowledge-base platform",
+      "enabled": false,
+      "kind": "http_chat",
+      "endpoint": "",
+      "configure_hint": "Set enabled=true and endpoint to a real Dify app API backed by the same corpus before making comparison claims."
+    },
+    {
+      "name": "RAGFlow",
+      "class": "document RAG product",
+      "enabled": false,
+      "kind": "http_chat",
+      "endpoint": "",
+      "configure_hint": "Set enabled=true and endpoint to a real RAGFlow chat API backed by the same corpus before making comparison claims."
+    },
+    {
+      "name": "Open WebUI",
+      "class": "self-hosted chat UI with knowledge/RAG",
+      "enabled": false,
+      "kind": "http_chat",
+      "endpoint": "",
+      "configure_hint": "Set enabled=true and endpoint to a real Open WebUI pipeline/API backed by the same corpus before making comparison claims."
+    }
+  ]
+}

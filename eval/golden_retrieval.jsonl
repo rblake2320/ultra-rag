@@ -1,0 +1,3 @@
+{"query":"how do I build the deterministic code graph","relevant_ids":["code_graph_cli","code_graph_module"],"min_recall_at_k":1.0,"min_mrr":1.0,"tags":["code_graph","cli"]}
+{"query":"what protects optional service configuration","relevant_ids":["config_optional_env"],"min_recall_at_k":1.0,"min_mrr":1.0,"tags":["config"]}
+{"query":"how is retrieval quality measured","relevant_ids":["retrieval_eval_metrics"],"min_recall_at_k":1.0,"min_mrr":1.0,"tags":["eval"]}

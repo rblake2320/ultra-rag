@@ -1,5 +1,5 @@
 """
-Parsers: DOCX (structure-aware), PDF, TXT/MD.
+Parsers: DOCX (structure-aware), PDF, TXT/MD, CSV/TSV, HTML, XLSX, PPTX.
 Returns list of blocks for the chunker.
 
 Each block is a dict:
@@ -13,6 +13,7 @@ Each block is a dict:
     }
 """
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterator
 
@@ -373,6 +374,151 @@ def parse_txt(path: Path) -> list:
     return blocks
 
 
+def parse_csv(path: Path) -> list:
+    """CSV/TSV parser that emits a markdown table block."""
+    import csv
+
+    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
+        rows = list(csv.reader(fh, delimiter=delimiter))
+
+    rows = [[cell.strip() for cell in row] for row in rows if any(cell.strip() for cell in row)]
+    if not rows:
+        return []
+
+    max_cols = max(len(row) for row in rows)
+    rows = [row + [""] * (max_cols - len(row)) for row in rows]
+    header = rows[0]
+    body = rows[1:]
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(["---"] * max_cols) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in body)
+    content = "\n".join(lines)
+    return [{
+        "content": content,
+        "content_type": "table",
+        "heading_path": [(1, path.stem)],
+        "context_prefix": path.stem,
+        "atomic": False,
+        "preserve_ws": False,
+    }]
+
+
+class _ReadableHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "noscript"}:
+            self.skip_depth += 1
+        elif tag in {"p", "br", "div", "section", "article", "tr", "h1", "h2", "h3", "li"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "noscript"} and self.skip_depth:
+            self.skip_depth -= 1
+        elif tag in {"p", "div", "section", "article", "tr", "li"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip_depth:
+            text = " ".join(data.split())
+            if text:
+                self.parts.append(text)
+
+    def text(self) -> str:
+        collapsed = re.sub(r"\n{3,}", "\n\n", "\n".join(self.parts))
+        return collapsed.strip()
+
+
+def parse_html(path: Path) -> list:
+    """HTML parser that strips scripts/styles and keeps readable text."""
+    parser = _ReadableHTMLParser()
+    parser.feed(path.read_text(encoding="utf-8", errors="replace"))
+    content = parser.text()
+    if not content or is_noise(content):
+        return []
+    return [{
+        "content": content,
+        "content_type": "text",
+        "heading_path": [(1, path.stem)],
+        "context_prefix": path.stem,
+        "atomic": False,
+        "preserve_ws": False,
+    }]
+
+
+def parse_xlsx(path: Path) -> list:
+    """Excel workbook parser that emits one markdown table per non-empty sheet."""
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise ImportError("Install openpyxl to parse XLSX files") from exc
+
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    blocks = []
+    try:
+        for sheet in workbook.worksheets:
+            rows = []
+            for row in sheet.iter_rows(values_only=True):
+                values = ["" if value is None else str(value).strip() for value in row]
+                if any(values):
+                    rows.append(values)
+            if not rows:
+                continue
+            max_cols = max(len(row) for row in rows)
+            rows = [row + [""] * (max_cols - len(row)) for row in rows]
+            lines = [
+                "| " + " | ".join(rows[0]) + " |",
+                "| " + " | ".join(["---"] * max_cols) + " |",
+            ]
+            lines.extend("| " + " | ".join(row) + " |" for row in rows[1:])
+            blocks.append({
+                "content": "\n".join(lines),
+                "content_type": "table",
+                "heading_path": [(1, sheet.title)],
+                "context_prefix": f"{path.stem} > {sheet.title}",
+                "atomic": False,
+                "preserve_ws": False,
+            })
+    finally:
+        workbook.close()
+    return blocks
+
+
+def parse_pptx(path: Path) -> list:
+    """PowerPoint parser that emits one text block per slide."""
+    try:
+        from pptx import Presentation
+    except ImportError as exc:
+        raise ImportError("Install python-pptx to parse PPTX files") from exc
+
+    presentation = Presentation(str(path))
+    blocks = []
+    for idx, slide in enumerate(presentation.slides, start=1):
+        texts = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text = shape.text.strip()
+                if text:
+                    texts.append(text)
+        content = "\n".join(texts).strip()
+        if content and not is_noise(content):
+            blocks.append({
+                "content": content,
+                "content_type": "text",
+                "heading_path": [(1, f"Slide {idx}")],
+                "context_prefix": f"{path.stem} > Slide {idx}",
+                "atomic": False,
+                "preserve_ws": False,
+            })
+    return blocks
+
+
 # ── Public registry ──────────────────────────────────────────────────────────
 PARSERS: dict = {
     ".docx": parse_docx,
@@ -381,4 +527,11 @@ PARSERS: dict = {
     ".txt":  parse_txt,
     ".md":   parse_txt,
     ".rst":  parse_txt,
+    ".csv":  parse_csv,
+    ".tsv":  parse_csv,
+    ".html": parse_html,
+    ".htm":  parse_html,
+    ".xlsx": parse_xlsx,
+    ".xlsm": parse_xlsx,
+    ".pptx": parse_pptx,
 }

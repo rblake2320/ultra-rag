@@ -1,14 +1,15 @@
 # Ultra RAG
 
-**The most comprehensive open-source RAG system** — combining the best techniques from every major research system into a single, production-ready pipeline.
+**An experimental full-stack RAG system** that combines a broad set of retrieval techniques into one local-first pipeline.
 
-Ultra RAG implements a complete 7-stage ingestion pipeline and a 10-step intelligent query pipeline, drawing from LightRAG, HippoRAG, GraphRAG, Microsoft's GraphRAG, RAPTOR, CRAG, Self-RAG, HyDE, Contextual Retrieval, and original innovations not found in any single system.
+Ultra RAG implements an 8-stage ingestion pipeline and a 10-step intelligent query pipeline, drawing from LightRAG, HippoRAG, GraphRAG, Microsoft's GraphRAG, RAPTOR, CRAG, Self-RAG, HyDE, and Contextual Retrieval. Treat it as a strong starting point for production work: run the tests, add your own evaluation set, and harden deployment settings for your environment.
 
 ---
 
 ## What Makes Ultra RAG Different
 
-- **7-stage ingestion pipeline** — parse, embed, contextualize, parent-chunk, KG extract, community detect, RAPTOR tree
+- **8-stage ingestion pipeline** — parse, embed, deterministic code graph, contextualize, parent-chunk, KG extract, community detect, RAPTOR tree
+- **Code graph artifacts** — extracts Python/SQL entities and relationships with `EXTRACTED` / `INFERRED` confidence labels, upserts them into the KG, and writes portable `graph.json`, `GRAPH_REPORT.md`, and `graph.html` outputs
 - **Knowledge Graph with PPR** — entities + relationships extracted by LLM, then Personalized PageRank traversal for multi-hop reasoning (HippoRAG-inspired)
 - **Leiden community detection** — Louvain/Leiden algorithm over the KG, LLM-generated community summaries for global thematic queries (GraphRAG-inspired)
 - **RAPTOR hierarchical summaries** — recursive clustering + LLM summarization tree for multi-level abstraction (RAPTOR paper)
@@ -19,6 +20,11 @@ Ultra RAG implements a complete 7-stage ingestion pipeline and a 10-step intelli
 - **Self-RAG** — adaptive filtering: predict relevance, support, and utility for each retrieved chunk
 - **Auto-routing query classifier** — LLM routes each query to the optimal retrieval strategy
 - **Retrieval Memory** — tracks chunk retrieval frequency with novelty penalties to prevent repetitive responses
+- **Built-in operations dashboard** — `/dashboard` surfaces health, recent query telemetry, quality scores, latency, and result counts
+- **Consumer workspace app** — `/app` provides workspace selection, document upload, ingest, source-cited chat, stats, recent queries, and playbook recommendations
+- **Query trace observability** — provenance-enabled API responses include per-stage timing for route, retrieval, rerank, CRAG, Self-RAG, parent expansion, logging, and provenance
+- **Policy-aware agent playbooks** — compact workflow catalog with full playbook bodies loaded only when selected, inspired by self-evolving agent skill libraries
+- **Durable agent workflows** — persisted run state, retries, approvals, and resume semantics for production launch gates instead of fragile one-shot loops
 - **Adversarial self-testing** — automatically generates blind-spot queries and monitors for coverage gaps
 - **RAGAS evaluation** — faithfulness, answer relevancy, context precision, context recall metrics
 - **NIM reranker** — optional NVIDIA NIM cross-encoder reranking (nvidia/rerank-qa-mistral-4b)
@@ -30,32 +36,38 @@ Ultra RAG implements a complete 7-stage ingestion pipeline and a 10-step intelli
 ```
 INGESTION PIPELINE
 ==================
-Documents (DOCX/PDF/TXT/MD)
+Documents and code (DOCX/PDF/TXT/MD/PY/SQL)
     │
     ▼  Stage 1: PARSE
     ├── Structure-aware DOCX parser (headings, tables, definitions, procedures)
     ├── PDF parser with table extraction (PyMuPDF)
-    └── Markdown/TXT parser (# heading sections)
+    ├── Markdown/TXT parser (# heading sections)
+    └── CSV/TSV, HTML, XLSX, and PPTX parsers for launch corpus coverage
     │
     ▼  Stage 2: EMBED
     ├── Ollama nomic-embed-text (768-dim)
     └── Stored in pgvector with full-text search index
     │
-    ▼  Stage 3: CONTEXTUAL
+    ▼  Stage 3: CODE GRAPH
+    ├── Deterministic Python/SQL extraction without LLM calls
+    ├── Confidence labels on edges: EXTRACTED | INFERRED | AMBIGUOUS
+    └── Exports graph-out/<collection>/{graph.json,GRAPH_REPORT.md,graph.html}
+    │
+    ▼  Stage 4: CONTEXTUAL
     └── LLM generates situating context per chunk ("This document discusses...")
     │
-    ▼  Stage 4: PARENTS
+    ▼  Stage 5: PARENTS
     └── Small chunks linked to medium parent chunks for context expansion
     │
-    ▼  Stage 5: KG EXTRACT
+    ▼  Stage 6: KG EXTRACT
     ├── LLM extracts entities + typed relationships from each chunk
     └── Synonymy edges built from embedding similarity
     │
-    ▼  Stage 6: COMMUNITIES
+    ▼  Stage 7: COMMUNITIES
     ├── Leiden community detection over entity graph
     └── LLM summarizes each community into a thematic description
     │
-    ▼  Stage 7: RAPTOR
+    ▼  Stage 8: RAPTOR
     ├── KMeans clustering of chunk embeddings
     ├── LLM summarizes each cluster
     └── Recursive until tree depth reached (default: 3 levels)
@@ -117,6 +129,8 @@ User Query
 git clone https://github.com/rblake2320/ultra-rag.git
 cd ultra-rag
 pip install -r requirements.txt
+# Optional editable install, including CLI entry points
+pip install -e ".[dev]"
 ```
 
 ### 2. Configure environment
@@ -124,6 +138,87 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env and set RAG_DB_PASSWORD (and optionally NVIDIA_API_KEY)
+```
+
+Environment references in `config.yaml` support defaults:
+
+```yaml
+password: "${RAG_DB_PASSWORD:-}"
+```
+
+This lets optional services such as NVIDIA reranking remain disabled without breaking unrelated commands.
+
+### Docker Compose
+
+For a local API + pgvector database:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+By default the API expects Ollama on the host at `http://host.docker.internal:11434`. Override with `OLLAMA_URL` if Ollama runs elsewhere.
+
+Set `ULTRARAG_API_KEY` to require an `X-API-Key` header for API endpoints other than health and docs. Set `ULTRARAG_CORS_ORIGINS` to a comma-separated allowlist for browser clients.
+
+### Agent Instructions
+
+This repo includes project-scoped guidance for coding agents:
+
+- `AGENTS.md` for Codex/OpenAI-style agents
+- `CLAUDE.md` for Claude Code
+- `GEMINI.md` for Gemini-style agents
+- `.cursor/rules/ultrarag.mdc` for Cursor
+- `.github/copilot-instructions.md` for GitHub Copilot
+
+The shared rule is: use `graph-out/<collection>/graph.json` or build it with `python ultra_code_graph.py default --no-db --json` before broad codebase exploration.
+
+### Local Readiness Check
+
+Run the full local green gate before considering a change complete:
+
+```bash
+python ultra_check.py
+```
+
+This verifies config loading, unit tests, Python compilation, deterministic retrieval evaluation, code graph smoke output, and Docker Compose syntax. Use `--no-docker` when Docker is unavailable.
+
+For deployment and launch planning, see `docs/PRODUCTION.md` and `docs/LAUNCH.md`.
+
+Generate an evidence-based benchmark report. Competitors remain explicitly
+`not_configured` until a real command or endpoint is wired to the same corpus:
+
+```bash
+python ultra_benchmark.py
+```
+
+Run the architecture and operations contract audit:
+
+```bash
+python ultra_arch_audit.py --json
+```
+
+Recommend reusable agent playbooks without injecting full workflow bodies:
+
+```bash
+python ultra_playbooks.py recommend "launch readiness" --json
+python ultra_playbooks.py show production_green_gate --json
+```
+
+Run an agent workflow durably so completed steps are persisted and resumable:
+
+```bash
+python ultra_agent_run.py run --workflow workflows/production_green_gate.yaml --store runs --json
+python ultra_agent_run.py show <run_id> --store runs --json
+python ultra_agent_run.py resume <run_id> --workflow workflows/production_green_gate.yaml --store runs --json
+```
+
+Deterministic retrieval quality is checked from `eval/golden_retrieval.jsonl`:
+
+```bash
+python ultra_retrieval_eval.py \
+  --golden eval/golden_retrieval.jsonl \
+  --fixture-results eval/fixture_results.json
 ```
 
 ### 3. Pull Ollama models
@@ -168,21 +263,25 @@ python ultra_query.py "your question here"
 
 ## Full Pipeline
 
-Run all 7 stages at once with `ultra_ingest.py`:
+Run all 8 stages at once with `ultra_ingest.py`:
 
 ```bash
-# Full pipeline (parse → embed → contextual → parents → KG → communities → RAPTOR)
+# Full pipeline (parse → embed → code_graph → contextual → parents → KG → communities → RAPTOR)
 python ultra_ingest.py default --stages all
 
 # Selective stages
 python ultra_ingest.py default --stages parse,embed
+python ultra_ingest.py default --stages code_graph
 python ultra_ingest.py default --stages kg,communities,raptor
 
-# Skip LLM stages (parse + embed only — no API calls)
+# Skip LLM stages (parse + embed + code_graph + parents — no API calls)
 python ultra_ingest.py default --stages all --no-llm
 
 # Re-process contextual retrieval (e.g. after changing the LLM)
 python ultra_ingest.py default --stages contextual --reprocess
+
+# Build only portable code graph artifacts, optionally without DB writes
+python ultra_code_graph.py default --no-db
 ```
 
 ---
@@ -246,10 +345,16 @@ python ultra_server.py --port 8300 --host 0.0.0.0
 ```
 
 Interactive docs at `http://localhost:8300/docs`
+Consumer app at `http://localhost:8300/app`
+Operations dashboard at `http://localhost:8300/dashboard`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/search` | POST | Full 10-step query pipeline |
+| `/api/chat` | POST | Source-cited consumer chat response |
+| `/api/upload` | POST | Upload documents and optionally ingest/embed |
+| `/api/collections` | GET/POST | List or create workspaces |
+| `/api/documents` | GET | List indexed documents |
 | `/api/ingest` | POST | Trigger ingestion pipeline |
 | `/api/entities` | POST | Browse KG entities |
 | `/api/communities` | POST | Browse detected communities |
@@ -257,6 +362,10 @@ Interactive docs at `http://localhost:8300/docs`
 | `/api/eval` | POST | Generate synthetic Q&A + run RAGAS |
 | `/api/stats` | GET | Collection statistics |
 | `/api/health` | GET | DB, Ollama, pgvector health check |
+| `/api/live` | GET | Process liveness probe |
+| `/api/ready` | GET | DB/model readiness probe |
+| `/api/observability/summary` | GET | Recent query telemetry summary |
+| `/dashboard` | GET | Built-in operations dashboard |
 
 ### Optional TensorRT-LLM Speculative Decoding
 
@@ -377,11 +486,17 @@ kg:
 ultra-rag/
 ├── ingest.py              # Simple ingest CLI (parse + chunk + embed)
 ├── query.py               # Simple query CLI (hybrid search)
-├── ultra_ingest.py        # Full 7-stage ingestion pipeline
+├── ultra_ingest.py        # Full 8-stage ingestion pipeline
+├── ultra_code_graph.py    # Deterministic code graph artifact builder
 ├── ultra_query.py         # Full 10-step intelligent query pipeline
 ├── ultra_server.py        # FastAPI REST server
 ├── ultra_eval.py          # Synthetic evaluation + RAGAS metrics
+├── ultra_benchmark.py     # Competitive benchmark report generator
+├── ultra_playbooks.py     # Policy-aware reusable workflow playbooks
+├── ultra_agent_run.py     # Durable workflow runner for agent execution
 ├── config.yaml            # All configuration
+├── static/app.html        # Consumer workspace app
+├── static/dashboard.html  # Operations dashboard
 ├── requirements.txt
 ├── .env.example
 ├── documents/             # Put your docs here (git-ignored)
@@ -390,11 +505,12 @@ ultra-rag/
 │   ├── config.py          # Config loader
 │   ├── db.py              # Base PostgreSQL schema + CRUD
 │   ├── db_ultra.py        # Extended schema (KG, RAPTOR, eval tables)
-│   ├── parsers.py         # DOCX / PDF / TXT parsers
+│   ├── parsers.py         # DOCX / PDF / TXT / CSV / HTML / XLSX / PPTX parsers
 │   ├── chunker.py         # Token-aware chunker
 │   ├── embedder.py        # Ollama embedding + batch processing
 │   ├── llm.py             # LLM client (Ollama + Claude fallback)
 │   ├── search.py          # Hybrid vector + keyword search + RRF
+│   ├── code_graph.py      # Python/SQL graph extraction + graph artifacts
 │   ├── reranker.py        # NIM cross-encoder reranking
 │   ├── contextual.py      # Contextual Retrieval (LLM chunk context)
 │   ├── parent_chunker.py  # Two-tier parent chunk hierarchy
@@ -410,6 +526,9 @@ ultra-rag/
 │   ├── retrieval_memory.py # Retrieval frequency tracking + novelty
 │   ├── adversarial.py     # Adversarial self-testing
 │   ├── provenance.py      # Score decomposition + audit trail
+│   ├── observability.py   # Query traces and dashboard telemetry helpers
+│   ├── agent_playbooks.py # Policy-aware workflow catalog and recommendations
+│   ├── durable_agents.py  # Persisted/resumable agent workflow execution
 │   ├── eval_generator.py  # Synthetic Q&A dataset generation
 │   ├── eval_runner.py     # RAGAS evaluation runner
 │   ├── multimodal.py      # Image/OCR support

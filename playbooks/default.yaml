@@ -1,0 +1,73 @@
+playbooks:
+  - id: production_green_gate
+    title: Production green gate
+    summary: Run the complete local readiness gate before declaring a change launch-ready.
+    triggers:
+      - production
+      - all areas green
+      - readiness
+      - launch ready
+    allowed_tools:
+      - filesystem
+      - shell
+      - docker
+    steps:
+      - Run python ultra_check.py --json.
+      - Confirm tests, compile, retrieval eval, benchmark, code graph smoke, and Docker Compose config all pass.
+      - Clean runtime caches and temporary directories.
+      - Report any external validation that is still outside repo-local control.
+
+  - id: corpus_golden_eval_expansion
+    title: Corpus-specific golden eval expansion
+    summary: Convert launch-corpus questions into deterministic retrieval eval cases.
+    triggers:
+      - golden eval
+      - corpus validation
+      - retrieval quality
+      - benchmark
+    allowed_tools:
+      - filesystem
+      - shell
+    steps:
+      - Add real launch questions to eval/golden_retrieval.jsonl.
+      - Assign relevant chunk or document IDs for every question.
+      - Run python ultra_retrieval_eval.py with the golden file and threshold settings.
+      - Keep failures as release blockers until retrieval or corpus quality improves.
+
+  - id: safe_external_research
+    title: Safe external research intake
+    summary: Review outside systems, extract concrete patterns, and only implement repo-safe improvements.
+    triggers:
+      - youtube
+      - competitor
+      - research
+      - what is out there
+    allowed_tools:
+      - web
+      - shell
+      - filesystem
+    steps:
+      - Identify the source title, author, date, and transcript or primary documentation.
+      - Separate concrete architecture patterns from marketing claims.
+      - Map each pattern to Ultra RAG gaps.
+      - Implement only deterministic, testable improvements.
+      - Rerun python ultra_check.py --json.
+
+  - id: launch_demo_flow
+    title: Launch demo flow
+    summary: Show the strongest Ultra RAG story in a repeatable public demo.
+    triggers:
+      - launch
+      - demo
+      - public
+      - conversation
+    allowed_tools:
+      - filesystem
+      - shell
+      - docker
+    steps:
+      - Run python ultra_check.py and show every gate green.
+      - Build code graph artifacts with python ultra_code_graph.py default --no-db.
+      - Start Docker Compose and open /api/live, /api/ready, /docs, and /dashboard.
+      - Run a provenance-enabled search and show trace timings.
+      - Run python ultra_benchmark.py and explain the competitive position.

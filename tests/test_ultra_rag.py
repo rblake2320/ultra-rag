@@ -623,13 +623,11 @@ def test_encode_image_base64_valid_file():
     try:
         from src.multimodal import encode_image_base64
         import base64
-        import tempfile
-        import os
     except ImportError as exc:
         pytest.skip(f"Import error: {exc}")
 
-    # Use a local temp dir under D: to avoid Windows %TEMP% permission issues
-    tmp_dir = Path("D:/tmp") if Path("D:/tmp").exists() else Path(tempfile.gettempdir())
+    tmp_dir = Path(__file__).parent / ".tmp"
+    tmp_dir.mkdir(exist_ok=True)
     img_file = tmp_dir / "test_ultra_rag_image.png"
 
     # PNG magic bytes

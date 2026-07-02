@@ -1,6 +1,9 @@
 """
-Config loader: reads config.yaml, resolves ${ENV_VAR} references,
-falls back to .env file at D:\\rag-ingest\\.env.
+Config loader: reads config.yaml and resolves environment references.
+
+Supported environment syntax:
+    ${VAR}              required; raises when VAR is unset
+    ${VAR:-default}     optional; uses default when VAR is unset
 """
 import os
 import re
@@ -13,7 +16,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 CONFIG_PATH  = PROJECT_ROOT / "config.yaml"
 ENV_PATH     = PROJECT_ROOT / ".env"
 
-_ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+_ENV_VAR_RE = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
 
 
 def _load_dotenv(path: Path) -> None:
@@ -32,12 +35,15 @@ def _load_dotenv(path: Path) -> None:
 
 
 def _resolve(obj: Any) -> Any:
-    """Recursively resolve ${VAR} references in strings."""
+    """Recursively resolve ${VAR} and ${VAR:-default} references in strings."""
     if isinstance(obj, str):
         def replace(m):
             var = m.group(1)
+            default = m.group(2)
             # Check if var exists in environment at all (allows empty values)
             if var not in os.environ:
+                if default is not None:
+                    return default
                 raise ValueError(f"Environment variable '{var}' is not set. "
                                  f"Add it to {ENV_PATH} or set it in the shell.")
             return os.environ[var]
@@ -69,3 +75,9 @@ def get_config() -> dict:
     if _cfg is None:
         _cfg = load_config()
     return _cfg
+
+
+def reset_config_cache() -> None:
+    """Clear the cached config; useful for tests that patch environment vars."""
+    global _cfg
+    _cfg = None

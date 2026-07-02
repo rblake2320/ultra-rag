@@ -374,8 +374,9 @@ def chunk_blocks(blocks: list) -> list:
         if not atomic and tok < min_tok:
             continue  # too small and not protected
 
-        # Per-type ceiling (atomic blocks bypass the ceiling)
-        type_max = type_limits.get(ctype, max_tok)
+        # Per-type ceilings tune relative sizes, but the configured global
+        # max_tokens remains the hard ceiling for non-atomic chunks.
+        type_max = min(type_limits.get(ctype, max_tok), max_tok)
 
         if atomic or tok <= type_max:
             # Fits as a single chunk (or must not be split)

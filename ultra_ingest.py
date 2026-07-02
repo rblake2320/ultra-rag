@@ -5,11 +5,12 @@ Ultra RAG Ingest: full 7-stage pipeline.
 Stages:
   1. parse        — Parse + chunk source documents (uses existing rag_ingest logic)
   2. embed        — Generate embeddings for all un-embedded chunks
-  3. contextual   — LLM-generated situating context per chunk (Anthropic-style)
-  4. parents      — Build parent chunks (small → large two-tier hierarchy)
-  5. kg           — Extract entities and relationships into knowledge graph
-  6. communities  — Leiden community detection + LLM summaries
-  7. raptor       — RAPTOR hierarchical summary tree
+  3. code_graph   — Deterministic code graph extraction + graph artifacts
+  4. contextual   — LLM-generated situating context per chunk (Anthropic-style)
+  5. parents      — Build parent chunks (small → large two-tier hierarchy)
+  6. kg           — Extract entities and relationships into knowledge graph
+  7. communities  — Leiden community detection + LLM summaries
+  8. raptor       — RAPTOR hierarchical summary tree
 
 Usage:
   python ultra_ingest.py imds --stages all
@@ -51,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Stage registry
 # ---------------------------------------------------------------------------
 
-ALL_STAGES = ["parse", "embed", "contextual", "parents", "kg", "communities", "raptor"]
+ALL_STAGES = ["parse", "embed", "code_graph", "contextual", "parents", "kg", "communities", "raptor"]
 LLM_STAGES = {"contextual", "kg", "communities", "raptor"}
 
 
@@ -86,6 +87,12 @@ def _run_embed(collection: str, conn) -> dict:
     from src.embedder import embed_collection  # noqa: PLC0415
     n = embed_collection(conn, collection)
     return {"chunks_embedded": n}
+
+
+def _run_code_graph(collection: str, conn) -> dict:
+    """Stage 3: deterministic code graph extraction and portable artifacts."""
+    from src.code_graph import process_collection  # noqa: PLC0415
+    return process_collection(conn, collection)
 
 
 def _run_contextual(collection: str, conn, reprocess: bool) -> dict:
@@ -210,6 +217,9 @@ def main():
 
                 elif stage == "embed":
                     stats = _run_embed(args.collection, conn)
+
+                elif stage == "code_graph":
+                    stats = _run_code_graph(args.collection, conn)
 
                 elif stage == "contextual":
                     stats = _run_contextual(args.collection, conn, args.reprocess)

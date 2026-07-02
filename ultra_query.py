@@ -304,10 +304,13 @@ def run_ultra_query(
     dict with keys:
         results, strategy_used, quality_score, latency_ms, provenance_chain_id
     """
+    from src.observability import QueryTrace, stage_timer  # noqa: PLC0415
     from typing import Optional  # noqa: PLC0415 — already imported at module top
     t_start = time.time()
+    trace = QueryTrace()
 
     # ── 1. Route ──────────────────────────────────────────────────────
+    stage_start = stage_timer()
     if strategy_override:
         strategy = strategy_override
         classification = {"query_type": "override", "confidence": 1.0, "reasoning": "manual"}
@@ -321,18 +324,22 @@ def run_ultra_query(
             log.warning("QueryRouter failed: %s; defaulting to hybrid", exc)
             strategy = "hybrid"
             classification = {"query_type": "unknown", "confidence": 0.5, "reasoning": str(exc)}
+    trace.mark("route", stage_start, strategy=strategy, query_type=classification.get("query_type"))
 
     log.info("Strategy: %s  (type=%s, conf=%.2f)",
              strategy, classification.get("query_type"), classification.get("confidence", 0))
 
     # ── 2. Retrieve (strategy-specific) ───────────────────────────────
+    stage_start = stage_timer()
     try:
         results = _run_strategy(conn, query, collection, strategy, top_k * 3)
     except Exception as exc:
         log.error("Retrieval failed: %s", exc)
         results = []
+    trace.mark("retrieve", stage_start, result_count=len(results))
 
     # ── 3. Record retrieval in memory ─────────────────────────────────
+    stage_start = stage_timer()
     chunk_ids = [r["id"] for r in results if r.get("id")]
     RetrievalMemory = _try_import("src.retrieval_memory", "RetrievalMemory")
     memory = None
@@ -343,8 +350,10 @@ def run_ultra_query(
         except Exception as exc:
             log.debug("RetrievalMemory.record_retrieval failed: %s", exc)
             memory = None
+    trace.mark("memory", stage_start, chunk_count=len(chunk_ids), enabled=memory is not None)
 
     # ── 4. Rerank ─────────────────────────────────────────────────────
+    stage_start = stage_timer()
     if not no_rerank and results:
         Reranker = _try_import("src.reranker", "Reranker")
         if Reranker:
@@ -358,8 +367,10 @@ def run_ultra_query(
             results = results[:top_k * 2]
     else:
         results = results[:top_k * 2]
+    trace.mark("rerank", stage_start, result_count=len(results), skipped=no_rerank)
 
     # ── 5. CRAG quality check ─────────────────────────────────────────
+    stage_start = stage_timer()
     quality_score = 0.75  # optimistic default
     corrective_action = "none"
     if not no_crag and results:
@@ -376,8 +387,10 @@ def run_ultra_query(
                 corrective_action = crag_result.get("action", "none")
             except Exception as exc:
                 log.debug("CRAG failed: %s; skipping", exc)
+    trace.mark("crag", stage_start, quality_score=quality_score, action=corrective_action, skipped=no_crag)
 
     # ── 6. Self-RAG adaptive filtering ────────────────────────────────
+    stage_start = stage_timer()
     SelfRAG = _try_import("src.self_rag", "SelfRAG")
     if SelfRAG and results:
         try:
@@ -388,18 +401,22 @@ def run_ultra_query(
             results = self_rag.adaptive_retrieve_and_filter(query, _self_search_fn, results)
         except Exception as exc:
             log.debug("SelfRAG failed: %s; skipping", exc)
+    trace.mark("self_rag", stage_start, result_count=len(results), enabled=SelfRAG is not None)
 
     # ── 7. Utility score boost ────────────────────────────────────────
+    stage_start = stage_timer()
     if memory and results:
         try:
             results = memory.apply_utility_boost(results)
         except Exception as exc:
             log.debug("utility_boost failed: %s", exc)
+    trace.mark("utility_boost", stage_start, result_count=len(results), enabled=memory is not None)
 
     # Truncate to final top_k
     results = results[:top_k]
 
     # ── 8. Parent chunk expansion ─────────────────────────────────────
+    stage_start = stage_timer()
     ParentChunker = _try_import("src.parent_chunker", "ParentChunker")
     if ParentChunker:
         try:
@@ -412,12 +429,14 @@ def run_ultra_query(
                         r["parent_content"] = parent_content
         except Exception as exc:
             log.debug("Parent content expansion failed: %s", exc)
+    trace.mark("parent_expansion", stage_start, result_count=len(results), enabled=ParentChunker is not None)
 
     # Attach provenance components to each result
     for rank, r in enumerate(results, 1):
         r["provenance_components"] = _build_provenance_components(r, rank)
 
     # ── 9. Log query ──────────────────────────────────────────────────
+    stage_start = stage_timer()
     latency_ms = int((time.time() - t_start) * 1000)
     query_log_id = 0
     try:
@@ -443,11 +462,14 @@ def run_ultra_query(
             conn.rollback()
         except Exception:
             pass
+    trace.mark("query_log", stage_start, query_log_id=query_log_id)
 
     # ── 10. Provenance chain ──────────────────────────────────────────
+    stage_start = stage_timer()
     provenance_chain_id = 0
     if query_log_id and results:
         provenance_chain_id = _log_provenance_chain(conn, query_log_id, results)
+    trace.mark("provenance", stage_start, provenance_chain_id=provenance_chain_id)
 
     return {
         "results":              results,
@@ -458,6 +480,7 @@ def run_ultra_query(
         "query_log_id":         query_log_id,
         "provenance_chain_id":  provenance_chain_id,
         "classification":       classification,
+        "trace":                trace.as_dict(),
     }
 
 

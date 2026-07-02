@@ -21,7 +21,8 @@ def _dsn() -> str:
     return (
         f"host={cfg['host']} port={cfg['port']} "
         f"dbname={cfg['database']} "
-        f"user={cfg['user']} password={cfg['password']}"
+        f"user={cfg['user']} password={cfg['password']} "
+        "connect_timeout=5"
     )
 
 

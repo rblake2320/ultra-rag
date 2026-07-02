@@ -1,0 +1,33 @@
+---
+alwaysApply: true
+---
+
+# Ultra RAG Cursor Rules
+
+For codebase, architecture, dependency, or data-flow questions, prefer the local graph before broad file reads.
+
+If `graph-out/default/graph.json` exists, inspect:
+
+- `graph-out/default/GRAPH_REPORT.md`
+- `graph-out/default/graph.json`
+
+If it does not exist, build it:
+
+```bash
+python ultra_code_graph.py default --no-db --json
+```
+
+After code changes, run:
+
+```bash
+pytest -q
+python -m compileall src ingest.py query.py ultra_ingest.py ultra_query.py ultra_eval.py ultra_server.py ultra_code_graph.py
+```
+
+Do not make unit tests depend on Postgres, Ollama, NVIDIA, or external API keys.
+
+Before considering a change complete, run:
+
+```bash
+python ultra_check.py
+```
