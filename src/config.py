@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 CONFIG_PATH  = PROJECT_ROOT / "config.yaml"
 ENV_PATH     = PROJECT_ROOT / ".env"
 
-_ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def _load_dotenv(path: Path) -> None:
@@ -36,8 +36,11 @@ def _resolve(obj: Any) -> Any:
     if isinstance(obj, str):
         def replace(m):
             var = m.group(1)
+            default = m.group(2)
             # Check if var exists in environment at all (allows empty values)
             if var not in os.environ:
+                if default is not None:
+                    return default
                 raise ValueError(f"Environment variable '{var}' is not set. "
                                  f"Add it to {ENV_PATH} or set it in the shell.")
             return os.environ[var]

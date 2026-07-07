@@ -25,6 +25,7 @@ import json
 import logging
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -157,12 +158,19 @@ class StatsResponse(BaseModel):
 # App setup
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup_event()
+    yield
+
+
 app = FastAPI(
     title="Ultra RAG API",
     description="7-stage RAG pipeline with KG, RAPTOR, CRAG, and RAGAS evaluation",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -198,12 +206,17 @@ def _get_conn():
 # Startup / shutdown
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
 async def startup_event():
     log.info("Ultra RAG Server starting up…")
-    conn = _get_conn()
-    await asyncio.to_thread(_ensure_schemas, conn)
-    log.info("Schemas ready.")
+    try:
+        conn = _get_conn()
+        await asyncio.to_thread(_ensure_schemas, conn)
+        log.info("Schemas ready.")
+    except Exception as exc:
+        log.warning(
+            "Startup DB/schema initialization failed; API will start in degraded mode: %s",
+            exc,
+        )
 
 
 def _ensure_schemas(conn) -> None:
@@ -220,11 +233,12 @@ def _ensure_schemas(conn) -> None:
 @app.get("/api/health", response_model=HealthResponse, tags=["System"])
 async def health():
     """Check DB connection, Ollama reachability, and pgvector availability."""
-    from datetime import datetime  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
 
     db_status = "ok"
     pgvector_status = "ok"
     ollama_status = "ok"
+    conn = None
 
     # DB check
     try:
@@ -235,12 +249,14 @@ async def health():
         db_status = f"error: {exc}"
 
     # pgvector check
-    try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE embedding IS NOT NULL LIMIT 1")
-    except Exception as exc:
-        pgvector_status = f"error: {exc}"
+    if conn is None:
+        pgvector_status = "skipped: db unavailable"
+    else:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE embedding IS NOT NULL LIMIT 1")
+        except Exception as exc:
+            pgvector_status = f"error: {exc}"
 
     # Ollama check
     try:
@@ -260,7 +276,7 @@ async def health():
         db=db_status,
         ollama=ollama_status,
         pgvector=pgvector_status,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
     )
 
 

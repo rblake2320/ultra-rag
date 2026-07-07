@@ -357,7 +357,16 @@ def chunk_blocks(blocks: list) -> list:
     min_tok         = cfg.get("min_tokens", 50)
     overlap_tok     = cfg.get("overlap_tokens", 150)
     merge_threshold = cfg.get("merge_threshold", 100)
-    type_limits     = {**DEFAULT_TYPE_LIMITS, **cfg.get("type_limits", {})}
+    configured_type_limits = cfg.get("type_limits", {})
+    type_limits = {
+        ctype: configured_type_limits.get(ctype, min(default_limit, max_tok))
+        for ctype, default_limit in DEFAULT_TYPE_LIMITS.items()
+    }
+    type_limits.update({
+        ctype: limit
+        for ctype, limit in configured_type_limits.items()
+        if ctype not in type_limits
+    })
 
     chunks: list = []
 

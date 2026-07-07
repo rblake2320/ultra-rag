@@ -23,11 +23,12 @@ collections:
   #   skip_files: []
 
 db:
-  host:     localhost
-  port:     5433
-  database: memoryweb
-  user:     memoryweb
+  host:     "${RAG_DB_HOST:-localhost}"
+  port:     "${RAG_DB_PORT:-5433}"
+  database: "${RAG_DB_DATABASE:-memoryweb}"
+  user:     "${RAG_DB_USER:-memoryweb}"
   password: "${RAG_DB_PASSWORD}"   # set in .env or shell environment
+  connect_timeout: "${RAG_DB_CONNECT_TIMEOUT:-3}"
 
 embedding:
   model:      nomic-embed-text
