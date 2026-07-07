@@ -18,10 +18,12 @@ log = logging.getLogger(__name__)
 
 def _dsn() -> str:
     cfg = get_config()["db"]
+    connect_timeout = cfg.get("connect_timeout", 3)
     return (
         f"host={cfg['host']} port={cfg['port']} "
         f"dbname={cfg['database']} "
-        f"user={cfg['user']} password={cfg['password']}"
+        f"user={cfg['user']} password={cfg['password']} "
+        f"connect_timeout={connect_timeout}"
     )
 
 

@@ -394,9 +394,15 @@ def _get_conn():
 @app.on_event("startup")
 async def startup_event():
     log.info("Ultra RAG Server starting up…")
-    conn = _get_conn()
-    await asyncio.to_thread(_ensure_schemas, conn)
-    log.info("Schemas ready.")
+    try:
+        conn = _get_conn()
+        await asyncio.to_thread(_ensure_schemas, conn)
+        log.info("Schemas ready.")
+    except Exception as exc:
+        log.warning(
+            "Startup DB/schema initialization failed; API will start in degraded mode: %s",
+            exc,
+        )
     # Warm up the reranker in background (avoids 5s first-query delay)
     async def _warm_reranker():
         try:
@@ -706,6 +712,7 @@ async def health():
     db_status = "ok"
     pgvector_status = "ok"
     ollama_status = "ok"
+    conn = None
 
     # DB check
     try:
@@ -717,13 +724,15 @@ async def health():
         db_status = f"error: {exc}"
 
     # pgvector check
-    try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE embedding IS NOT NULL LIMIT 1")
-        conn.commit()
-    except Exception as exc:
-        pgvector_status = f"error: {exc}"
+    if conn is None:
+        pgvector_status = "skipped: db unavailable"
+    else:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM rag.chunks WHERE embedding IS NOT NULL LIMIT 1")
+            conn.commit()
+        except Exception as exc:
+            pgvector_status = f"error: {exc}"
 
     # Ollama check
     try:
