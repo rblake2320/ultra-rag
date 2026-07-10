@@ -21,7 +21,7 @@ Endpoints:
 
 Run:
   python ultra_server.py
-  python ultra_server.py --port 8300 --host 0.0.0.0
+  python ultra_server.py --port 8300 --host 127.0.0.1
 """
 import asyncio
 import json
@@ -1551,7 +1551,11 @@ async def search_stream(req: SearchRequest, request: Request,
 def main():
     import argparse  # noqa: PLC0415
     parser = argparse.ArgumentParser(description="Ultra RAG API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host (default: 127.0.0.1; opt in explicitly to network exposure)",
+    )
     parser.add_argument("--port", type=int, default=8300, help="Port (default: 8300)")
     parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker processes")

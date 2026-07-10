@@ -62,7 +62,7 @@ if (-not (Test-Path $pythonExe)) {
 }
 
 Start-Process -FilePath $pythonExe `
-    -ArgumentList "ultra_server.py" `
+    -ArgumentList @("ultra_server.py", "--host", "127.0.0.1", "--port", "8300") `
     -WorkingDirectory "D:\rag-ingest" `
     -WindowStyle Hidden `
     -RedirectStandardOutput "D:\rag-ingest\logs\ultra_server_stdout.log" `
