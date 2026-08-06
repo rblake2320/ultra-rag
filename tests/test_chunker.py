@@ -110,6 +110,29 @@ def test_table_split():
         assert c["token_count"] <= MAX + 20, f"Table chunk too large: {c['token_count']}"
 
 
+
+# Import statements needed (only new ones not in existing code)
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from fastapi import Depends
+from psycopg2.extras import DictCursor
+from .database import get_conn
+
+# New endpoint
+router = APIRouter()
+
+@router.get("/api/collections")
+async def get_collections(conn = Depends(get_conn)):
+    with conn.cursor(cursor_factory=DictCursor) as cur:
+        cur.execute("""
+            SELECT collection as name, count(*) as chunk_count
+            FROM rag.chunks
+            GROUP BY collection
+            ORDER BY collection
+        """)
+        collections = cur.fetchall()
+        return JSONResponse(content=[dict(row) for row in collections], media_type="application/json")
+
 if __name__ == "__main__":
     tests = [
         test_noise_filtered,
