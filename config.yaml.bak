@@ -1,0 +1,235 @@
+collections:
+  imds:
+    paths:
+    - C:\Users\techai\OneDrive\Desktop\All IMDS
+    exclude_dirs:
+    - gherkin-test-cases
+    - to convert
+    - rag-output
+    - __pycache__
+    skip_files:
+    - CLAUDE_WINDOW_PROMPT.txt
+    - rag_forge_run.py
+  personal:
+    paths:
+    # Root home dir — max_depth:0 = root-level files only (171 planning/patent/strategy .md docs)
+    - path: C:\Users\techai
+      max_depth: 0
+    # OneDrive desktop (whitepapers, notes, projects, resume, business docs)
+    - C:\Users\techai\OneDrive\Desktop
+    # OneDrive documents
+    - C:\Users\techai\OneDrive\Documents
+    # AI Army coordination: handoff notes + decision logs
+    - C:\Users\techai\ai-business\shared\handoff
+    - C:\Users\techai\ai-business\shared\decisions
+    # Business analysis docs
+    - C:\Users\techai\ai-business\ai-router-platform
+    # ── Remote sources (synced to local staging) ──────────────────────────
+    # S3: mk-copilot product docs + AI Army research papers
+    - D:\personal-rag-staging\s3\mk-copilot-knowledge-base
+    # S3: AIHangout patent + architecture + session docs
+    - D:\personal-rag-staging\s3\aihangout-patent
+    # S3: AI business backup docs
+    - D:\personal-rag-staging\s3\ai-business-backup
+    # Spark-1 (DGX GB10): strategy, MK Copilot analysis, AI Army status docs
+    - D:\personal-rag-staging\spark1
+    # Spark-2 (DGX GB10): performance research, training notes
+    - D:\personal-rag-staging\spark2
+    # ── D: drive additions ────────────────────────────────────────────────
+    # Patent readiness: curated claim support, product alignment, ops state, final docs (16 MDs)
+    # Skipping 01_evidence_raw — 688K generated MDs, duplicates of other sources
+    - D:\patent-readiness-master\04_claim_support
+    - D:\patent-readiness-master\05_product_alignment
+    - D:\patent-readiness-master\06_ops_state
+    - D:\patent-readiness-master\07_final
+    # Patent evidence PDFs: NLF training system patent + industry analysis (3 PDFs)
+    - path: D:\patent-readiness-master\01_evidence_raw\dgx_spark_1\patent_evidence
+      max_depth: 0
+    - path: D:\patent-readiness-master\01_evidence_raw\rtx_5090\downloads
+      max_depth: 0
+    # OneDrive Documents: personal + business docs — 724 PDFs/DOCX, 1227 MDs
+    # (C:\Users\techai\OneDrive\Documents already in config above — this adds D: mirror)
+    # acq-copilot v2: V2 plan, README architecture notes for acquisition copilot
+    - path: D:\acq-copilot-v2
+      max_depth: 0
+    # MemoryWeb project docs (README, PGVECTOR_INSTALL)
+    - path: D:\memory-web
+      max_depth: 0
+    # MemoryPulse project README
+    - path: D:\memory-pulse
+      max_depth: 0
+    exclude_dirs:
+    # ── Home dir subdirs (keep only root-level files from C:\Users\techai) ──
+    - AppData
+    - OneDrive
+    - Desktop
+    - Documents
+    - Downloads
+    - Music
+    - Videos
+    - Pictures
+    - Searches
+    - Contacts
+    - Links
+    - Favorites
+    - Saved Games
+    - ai-business
+    - .claude
+    - .ssh
+    - .cursor
+    - .config
+    - .local
+    - bin
+    - go
+    - npm-cache
+    - PycharmProjects
+    - IdeaProjects
+    - dms-development
+    - .cargo
+    - .rustup
+    - .bun
+    - .cache
+    - .codex
+    - .continue
+    - .docker
+    - .kube
+    - .m2
+    - .jdks
+    - .jupyter
+    - .ipython
+    - .matplotlib
+    - .keras
+    - .deepface
+    - .ollama
+    - .lmstudio
+    - .serena
+    - .playwright-cli
+    - .playwright-mcp
+    - .aws
+    - .azure
+    - .gemini
+    - .wrangler
+    - .minikube
+    - .vs-kubernetes
+    - .factory
+    - .antigravity
+    - .cagent
+    - CrossDevice
+    # ── OneDrive Desktop subdirs to skip ──
+    - All IMDS
+    - gherkin-test-cases
+    - to convert
+    - rag-output
+    - acq-copilot
+    - speed-dating-app
+    - speed-dating-app1
+    - New folder
+    - New folder (2)
+    - Installers & Drivers
+    - Images & Media
+    # ── D: drive subtrees to exclude globally ──
+    # ai-data: Anaconda/conda environment files — no knowledge content
+    - environments
+    - training-cache
+    # dev: package caches (bun, npm, cargo, rustup toolchains)
+    - pip-cache
+    - npm-cache
+    - cargo
+    - rustup
+    - m2
+    # patent-readiness-master: skip raw evidence dump (688K generated files)
+    - 01_evidence_raw
+    - 02_evidence_normalized
+    - 03_manifests
+    # New folder (4): personal finance statements / bank PDFs — not knowledge
+    - New folder (4)
+    # hold: franchise ops manuals (Auntie Anne's equipment, HACCP forms) — narrow domain
+    - hold
+    # WORK KNOWLEgdE/01_Documentation: UFT log dumps + random lib READMEs
+    - 01_Documentation
+    # ElectionCountdown: mostly Replit-generated project planning noise
+    - ElectionCountdown-1
+    - ElectionCountdown-1 (2)
+    - ElectionCountdown-1 (5)
+    - arena1
+    # ── Standard code/build dirs ──
+    - node_modules
+    - .git
+    - __pycache__
+    - .venv
+    - .pytest_cache
+    - dist
+    - build
+    - .next
+    - target
+    - unsloth_compiled_cache
+    skip_files:
+    - desktop.ini
+    - ntuser.ini
+    - ntuser.dat
+db:
+  host: localhost
+  port: 5432
+  database: memoryweb
+  user: memoryweb
+  password: ${RAG_DB_PASSWORD}
+embedding:
+  model: nomic-embed-text
+  provider: ollama
+  dimensions: 768
+  ollama_url: http://localhost:11434
+  batch_size: 4
+search:
+  reranker_model: nvidia/rerank-qa-mistral-4b
+  reranker_endpoint: https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking
+  nvidia_api_key: ${NVIDIA_API_KEY}
+  rrf_k_vector: 60
+  rrf_k_keyword: 40
+watcher:
+  poll_interval: 60
+  stability_delay: 5
+chunking:
+  max_tokens: 1000
+  min_tokens: 50
+  overlap_tokens: 150
+  merge_threshold: 100
+  type_limits:
+    field_definition: 400
+    table: 1200
+    procedure: 1000
+    screen_print: 800
+    text: 1000
+    body: 1000
+    box: 900
+    list: 800
+llm:
+  provider: ollama
+  model: qwen2.5-coder:32b
+  fast_model: qwen2.5:7b
+  ollama_url: http://localhost:11434
+  max_tokens: 2000
+kg:
+  extraction_batch_size: 50
+  synonymy_threshold: 0.8
+  ppr_alpha: 0.85
+  ppr_max_iter: 30
+raptor:
+  max_levels: 3
+  cluster_size: 10
+  min_cluster_items: 3
+contextual:
+  batch_size: 20
+  max_doc_preview_chars: 3000
+evaluation:
+  default_n_questions: 50
+  question_distribution:
+    extractive: 0.4
+    abstractive: 0.4
+    multi_hop: 0.2
+retrieval_memory:
+  alpha: 0.15
+  utility_boost_weight: 0.3
+adversarial:
+  n_queries: 20
+  blind_spot_threshold: 0.3
+  schedule_hours: 24
